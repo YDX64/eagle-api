@@ -1,398 +1,321 @@
-# Golsinyali Football API
+# Eagle API — Birlesik Futbol Tahmin Motoru
 
-High-performance football match data API with multi-source failover, intelligent caching, and comprehensive analysis features.
+7 kaynak, Poisson dagılımı, odds hareketi analizi ve seri tespiti ile futbol tahmin motoru.
 
-## Features
+Bee (football-analysis-api) fork'u uzerine gelistirildi. Falcon ve Predator algoritmalarının en iyi ozellikleri Bee'nin analiz pipeline'ına entegre edildi.
 
-- **Multi-Source Failover**: Automatic failover between data sources (nowgoal26.com, goaloo.com) with health tracking
-- **Intelligent Caching**: Redis-backed hybrid caching with stale-while-revalidate pattern
-- **Real-Time Live Data**: Live match updates with 30-second refresh intervals
-- **Comprehensive Analysis**: H2H statistics, odds analysis, team performance, and predictions
-- **Production Ready**: Gunicorn/gevent deployment, systemd service, Sentry error tracking
+## Sunucu Bilgileri
 
-## Quick Start
+| Bilgi | Deger |
+|-------|-------|
+| Sunucu | AWAXX (147.93.94.92) |
+| Port | 8098 |
+| Servis | `systemctl start/stop/restart eagle-api` |
+| Dizin | `/root/eagle-api` |
+| Python | 3.12+ |
+| Framework | Flask + Gunicorn (gevent) |
+| Cache | Redis DB 5 |
+| GitHub | https://github.com/YDX64/eagle-api |
 
-### Prerequisites
-
-- Python 3.9+
-- Redis Server
-- Virtual Environment (recommended)
-
-### Installation
+## Guncelleme (GitHub Sync)
 
 ```bash
-# Clone the repository
-git clone <repository-url>
-cd golsinyali_api_mevcut
+# Tek komut — GitHub'dan cekip restart eder:
+bash /root/eagle-api/update.sh
 
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# or
-.\venv\Scripts\activate  # Windows
+# Manuel adımlar:
+cd /root/eagle-api
+git pull origin main
+source venv/bin/activate
+pip install -r requirements.txt --quiet
+systemctl restart eagle-api
+```
 
-# Install dependencies
+## Ilk Kurulum (Sifirdan)
+
+```bash
+cd /root
+git clone https://github.com/YDX64/eagle-api.git
+cd eagle-api
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
+mkdir -p logs data
 
-# Setup environment
+# .env olustur (asagidaki ornege bak)
 cp .env.example .env
-# Edit .env with your configuration
+nano .env
 
-# Start Redis
-redis-server
+# Systemd servisi kur
+cat > /etc/systemd/system/eagle-api.service << 'EOF'
+[Unit]
+Description=Eagle API - Unified Football Prediction Engine
+After=network.target redis.service
 
-# Run development server
-python app.py
+[Service]
+Type=forking
+User=root
+WorkingDirectory=/root/eagle-api
+Environment=FLASK_ENV=production
+ExecStart=/root/eagle-api/venv/bin/gunicorn -w 2 -k gevent --bind 0.0.0.0:8098 --timeout 120 --daemon --pid /root/eagle-api/gunicorn.pid app:app
+ExecReload=/bin/kill -HUP $MAINPID
+ExecStop=/bin/kill -TERM $MAINPID
+PIDFile=/root/eagle-api/gunicorn.pid
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable eagle-api
+systemctl start eagle-api
+
+# Kontrol
+curl http://127.0.0.1:8098/api/v1/health
 ```
 
-### Production Deployment
+## Ortam Degiskenleri (.env)
 
 ```bash
-# Install systemd service
-sudo cp golsinyali-api.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable golsinyali-api
-sudo systemctl start golsinyali-api
-
-# Warm cache
-./warm_cache.sh http://localhost:8000
-
-# Setup daily cache warming (6:00 AM)
-./setup_cron.sh http://localhost:8000
-```
-
-## API Endpoints
-
-### Match Data
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/match/{id}` | GET | Match details with analysis |
-| `/api/v1/match/{id}/h2h` | GET | Head-to-head data |
-| `/api/v1/match/{id}/odds` | GET | Odds analysis |
-| `/api/v1/matches/today` | GET | Today's matches |
-| `/api/v1/matches/date/{date}` | GET | Matches by date (YYYY-MM-DD) |
-| `/api/v1/matches/tomorrow` | GET | Tomorrow's matches |
-| `/api/v1/matches/yesterday` | GET | Yesterday's matches |
-
-### Live Matches
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/matches/live` | GET | All live matches |
-| `/api/v1/matches/live/{id}` | GET | Live match details |
-| `/api/v1/matches/live/{id}/stats` | GET | Live technical statistics |
-| `/api/v1/matches/live/{id}/odds` | GET | Live odds (Bet365) |
-| `/api/v1/matches/live/{id}/corners` | GET | Corner statistics |
-| `/api/v1/matches/live/{id}/events` | GET | Match events (goals, cards) |
-
-### Health & Monitoring
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/health` | GET | Basic health check |
-| `/api/v1/health/detailed` | GET | Detailed health information |
-| `/api/v1/cache/stats` | GET | Cache performance metrics |
-| `/api/v1/sources/health` | GET | Data source health metrics |
-
-### Other
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/auth/token` | POST | Generate JWT token |
-| `/api/v1/leagues` | GET | Get all leagues |
-| `/api/v1/leagues/{id}/matches` | GET | Matches by league |
-| `/api/v1/teams/search?q=` | GET | Search teams |
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     Flask Application                        │
-│  Rate Limiting (200/min) │ CORS │ Compression │ Sentry      │
-└─────────────────────────────┬───────────────────────────────┘
-                              │
-┌─────────────────────────────▼───────────────────────────────┐
-│                    Routes (Blueprints)                       │
-│  matches.py │ live.py │ health.py │ leagues.py │ teams.py   │
-└─────────────────────────────┬───────────────────────────────┘
-                              │
-    ┌─────────────────────────┼─────────────────────────┐
-    │                         │                         │
-┌───▼───────┐        ┌───────▼────────┐        ┌───────▼───────┐
-│   Cache   │        │  HTTP Client   │        │   Analysis    │
-│   Layer   │        │  Thread Pool   │        │    Modules    │
-│  (Redis)  │        │ (20 workers)   │        │  (H2H, Odds)  │
-└───────────┘        └───────┬────────┘        └───────────────┘
-                             │
-              ┌──────────────┼──────────────┐
-              │              │              │
-     ┌────────▼────────┐    │     ┌────────▼────────┐
-     │ Source Manager  │    │     │    Parsers      │
-     │ Health Tracking │◄───┘     │  HTML/JSON      │
-     │ Auto Failover   │          │  Parsing        │
-     └────────┬────────┘          └─────────────────┘
-              │
-    ┌─────────▼──────────────────────────────┐
-    │            Data Sources                 │
-    │  Primary: live3.nowgoal26.com          │
-    │  Fallback: www.goaloo.com              │
-    └─────────────────────────────────────────┘
-```
-
-## Configuration
-
-### Environment Variables
-
-Create a `.env` file based on `.env.example`:
-
-```bash
-# Flask
 FLASK_ENV=production
-SECRET_KEY=your-secret-key
+SECRET_KEY=<random-secret>
+API_SECRET_KEY=<api-key>
+JWT_SECRET_KEY=<jwt-key>
 
-# Data Sources
-PRIMARY_DATA_SOURCE=https://live3.nowgoal26.com
-FALLBACK_DATA_SOURCES=https://www.goaloo.com
-
-# Cache (Redis)
+# Cache
 CACHE_TYPE=redis
 CACHE_REDIS_HOST=localhost
 CACHE_REDIS_PORT=6379
-CACHE_DEFAULT_TIMEOUT=1800
+CACHE_REDIS_DB=5
 
-# Timeouts (Fast Failover)
-HTTP_TIMEOUT_CONNECT=3
-HTTP_TIMEOUT_READ=5
-MAX_RETRIES_PER_SOURCE=0
+# Data Sources
+PRIMARY_DATA_SOURCE=https://www.nowgoal.com
+FALLBACK_DATA_SOURCES=https://live5.nowgoal26.com,https://www.goaloo.com
+LEAGUE_DATA_SOURCE=https://football.nowgoal26.com
 
-# Thread Pool
-MAX_CONCURRENT_REQUESTS=20
-MAX_WORKERS_PER_REQUEST=8
+# Eagle: Dis API Baglantilari
+EAGLE_FALCON_URL=http://127.0.0.1:8092
+EAGLE_PREDATOR_URL=http://127.0.0.1:8090
+EAGLE_FALCON_KEY=<falcon-api-key>
+EAGLE_PREDATOR_KEY=<predator-api-key>
+EAGLE_FALCON_TIMEOUT=45
+EAGLE_PREDATOR_TIMEOUT=30
+EAGLE_FALCON_CONCURRENT=3
+EAGLE_FALCON_DELAY=0.3
+EAGLE_MATCH_THRESHOLD=0.80
 
-# Monitoring
-SENTRY_DSN=your-sentry-dsn
-LOG_LEVEL=INFO
+# Opsiyonel: Predator V2
+EAGLE_PREDATOR_V2_URL=
+EAGLE_PREDATOR_V2_KEY=
 ```
 
-### Gunicorn Configuration
+## 7 Tahmin Kaynagi
 
-The `gunicorn_config.py` is optimized for high-concurrency:
+| # | Kaynak | Modul | Aciklama |
+|---|--------|-------|----------|
+| 1 | **H2H Analysis** | `analysis/h2h.py` | Gecmis karsilasma istatistikleri |
+| 2 | **Team Performance** | `analysis/team_performance.py` | Son 20 mac performans metrikleri |
+| 3 | **Correct Score** | `analysis/correct_score.py` | Skor oranlarından turetilmis olasıliklar |
+| 4 | **Odds Analysis** | `analysis/odds_analysis.py` | Bahis oranlarından piyasa yuzdesi |
+| 5 | **Poisson Model** | `analysis/poisson_model.py` | **YENi** — Matematiksel gol dagılımı |
+| 6 | **Odds Movement** | `analysis/odds_movement.py` | **YENi** — Acılıs→kapanıs hareket sinyalleri |
+| 7 | **Streak Detector** | `analysis/streak_detector.py` | **YENi** — Seri/trend tespiti |
 
-- **Workers**: `(CPU cores × 2) + 1`
-- **Worker Class**: `gevent` (10,000 connections each)
-- **Timeout**: 90 seconds (allows for failover)
-- **Max Requests**: 10,000 per worker (with jitter)
+### Kaynak 5: Poisson Model (YENi)
 
-## Caching Strategy
+Poisson dagılımı ile gol olasılıkları hesaplar:
 
-### Smart TTLs
+```
+P(X=k) = (lambda^k * e^(-lambda)) / k!
 
-| Data Type | Cache TTL | Reason |
-|-----------|-----------|--------|
-| Finished matches | 24 hours | Data never changes |
-| Live matches | 1 minute | Frequent updates |
-| Future matches | 5 minutes | Moderate changes |
-| H2H data | 24 hours | Historical data |
-| Odds data | 15 minutes | Changes frequently |
-| Live odds | 15 seconds | Real-time data |
+home_lambda = (home_attack / league_avg) * (away_defense / league_avg) * league_avg
+away_lambda = (away_attack / league_avg) * (home_defense / league_avg) * league_avg
 
-### Stale-While-Revalidate
-
-The API implements a stale-while-revalidate pattern:
-1. Return cached data immediately (even if stale)
-2. Trigger background refresh for stale data
-3. Users never wait for fresh data
-
-### Request Deduplication
-
-Concurrent identical requests share the same fetch operation, preventing duplicate upstream calls.
-
-## Multi-Source Failover
-
-### Configuration
-
-```python
-MAX_RETRIES_PER_SOURCE = 0      # No retry, immediate failover
-HTTP_TIMEOUT_CONNECT = 3         # 3 second connection timeout
-HTTP_TIMEOUT_READ = 5            # 5 second read timeout
-SOURCE_HEALTH_THRESHOLD = 0.3    # 30% error rate triggers swap
-CONSECUTIVE_FAIL_THRESHOLD = 10  # 10 consecutive failures triggers swap
-MIN_SWAP_INTERVAL = 300          # 5 min minimum between swaps
+P(Over 2.5)  = 1 - SUM[P(h)*P(a)] for h+a < 3
+P(BTTS)      = 1 - P(h=0) - P(a=0) + P(h=0,a=0)
+P(Home Win)  = SUM[P(h)*P(a)] for h > a
 ```
 
-### Health Tracking
+**Cikarir**: 1x2, Over/Under (1.5, 2.5, 3.5), BTTS, HT 1x2, HT Goals, Expected Goals (xG)
 
-The system tracks:
-- Error rate per source (sliding window of 100 requests)
-- Consecutive failures
-- Error types (timeout, 404, 5xx)
-- Automatic primary source swapping
+### Kaynak 6: Odds Movement (YENi)
 
-## Management Scripts
+Bahiscilerin acılıs→kapanıs oran degisikliklerinden sinyal cikarir:
 
-| Script | Description |
-|--------|-------------|
-| `./start_gunicorn.sh` | Start server (supports --daemon, --reload) |
-| `./stop_gunicorn.sh` | Stop server (supports --force) |
-| `./restart_gunicorn.sh` | Restart server |
-| `./warm_cache.sh` | Pre-warm cache with today's matches |
-| `./setup_cron.sh` | Setup daily cache warming |
-| `./update_base_url.sh` | Interactive data source configuration |
+- **Goal Line hareketi**: Kac bahisci goal line'ı yukseltti/dusurdu → Over/Under sinyali
+- **Asian Handicap hareketi**: AH hangi yone kaydi → MS sinyali
+- **1x2 oran dususleri**: Hangi tarafin oranı en cok dustu → Para akisi sinyali
+- **HT oranları**: Ilk yarı icin ayni analiz
 
-## Monitoring
+### Kaynak 7: Streak Detector (YENi)
 
-### Health Endpoints
+Son 10 macta tekrarlayan oruntuleri tespit eder:
+
+| Seri | Esik | Ornek |
+|------|------|-------|
+| Over 2.5 | ≥%80 | Her iki takımın son 10 macının 8+'ında 3+ gol |
+| BTTS | ≥%75 | Her iki takım son 10 macın 7.5+'ında gol atmis |
+| HT Gol | ≥%80 | Son 10 macın 8+'ında ilk yarı gol var |
+| MS Home | ≥%70 WR | Ev sahibi son 10'da 7+ galibiyet |
+| H2H Over | ≥%80 | Kafa kafaya son 10'da 8+ mac over |
+
+## Final Predictions Agirliklari
+
+### 1x2 (Mac Sonucu) — 7 kaynak
+
+| Kaynak | Agirlik |
+|--------|---------|
+| Team Performance | %25 |
+| Odds Analysis | %25 |
+| H2H | %20 |
+| Correct Score | %10 |
+| **Poisson** | **%15** |
+| **Odds Movement** | **%10** |
+| **Streaks** | **%5** |
+
+### Goal Lines (Over/Under) — 6 kaynak
+
+| Kaynak | Agirlik |
+|--------|---------|
+| Team Performance | %30 |
+| H2H | %20 |
+| Correct Score | %15 |
+| **Poisson** | **%20** |
+| **Odds Movement** | **%15** |
+| **Streaks** | **%5** |
+
+### BTTS (Karsilikli Gol) — 5 kaynak
+
+| Kaynak | Agirlik |
+|--------|---------|
+| Team Performance | %30 |
+| H2H | %25 |
+| Correct Score | %15 |
+| **Poisson** | **%20** |
+| **Streaks** | **%5** |
+
+### HT (Ilk Yari) — 4 kaynak
+
+| Kaynak | Agirlik |
+|--------|---------|
+| Team Performance | %40 |
+| H2H | %30 |
+| **Poisson HT** | **%15** |
+| **Odds Movement HT** | **%10** |
+
+> Agirliklar dinamik normalize edilir. Bir kaynak veri saglayamazsa agirligi diger kaynaklara dagitilir.
+
+## API Endpointleri
+
+### Mac Verileri (Bee uyumlu)
+
+| Endpoint | Metod | Aciklama |
+|----------|-------|----------|
+| `/api/v1/match/{id}` | GET | Mac detaylari + Eagle analizi |
+| `/api/v1/match/{id}/h2h` | GET | H2H verileri |
+| `/api/v1/match/{id}/odds` | GET | Oran analizi |
+| `/api/v1/matches/today` | GET | Bugunun maclari |
+| `/api/v1/matches/date/{date}` | GET | Tarihe gore maclar |
+| `/api/v1/matches/live` | GET | Canli maclar |
+| `/api/v1/matches/live/{id}` | GET | Canli mac detayi |
+
+### Eagle Spesifik
+
+| Endpoint | Metod | Aciklama |
+|----------|-------|----------|
+| `/api/v1/eagle/match/{id}` | GET | Eagle birlesik tahmin (4 kaynak) |
+| `/api/v1/eagle/matches/{date}` | GET | Tarih bazli Eagle tahminleri |
+| `/api/v1/eagle/best/{date}` | GET | En iyi tahminler (filtre) |
+| `/api/v1/eagle/banko/{date}` | GET | BANKO tahminler |
+| `/api/v1/eagle/status` | GET | Motor durumu ve kaynak bilgisi |
+
+### Saglik & Izleme
+
+| Endpoint | Metod | Aciklama |
+|----------|-------|----------|
+| `/api/v1/health` | GET | Saglik kontrolu |
+| `/api/v1/health/detailed` | GET | Detayli saglik |
+| `/api/v1/cache/stats` | GET | Cache istatistikleri |
+| `/api/v1/sources/health` | GET | Veri kaynagi sagligi |
+
+## Mimari
+
+```
+Eagle API (Port 8098)
+├── Flask App + Gunicorn/gevent
+├── Routes
+│   ├── matches.py ............. Mac listesi + detay
+│   ├── live.py ................ Canli maclar
+│   ├── eagle.py ............... Eagle birlesik tahmin endpoint'leri
+│   ├── leagues.py ............. Lig verileri
+│   └── health.py .............. Saglik kontrolleri
+├── Analysis Pipeline (7 kaynak, paralel)
+│   ├── h2h.py ................. H2H istatistikleri
+│   ├── team_performance.py .... Takim performans metrikleri
+│   ├── correct_score.py ....... Skor oranları turevi
+│   ├── odds_analysis.py ....... Piyasa oran analizi
+│   ├── poisson_model.py ....... [EAGLE] Poisson gol modeli
+│   ├── odds_movement.py ....... [EAGLE] Oran hareketi sinyalleri
+│   ├── streak_detector.py ..... [EAGLE] Seri/trend tespiti
+│   └── final_predictions.py ... 7 kaynagi birlestirir
+├── Eagle Module (dis API entegrasyonu)
+│   ├── config.py .............. Falcon/Predator URL ve agirliklar
+│   ├── collector.py ........... Falcon/Predator veri cekme
+│   └── combiner.py ............ Ensemble birlestirme stratejisi
+├── Infra
+│   ├── http_client.py ......... Multi-source failover HTTP client
+│   ├── cache_utils.py ......... Redis + stale-while-revalidate
+│   ├── source_manager.py ...... Veri kaynagi saglik takibi
+│   └── security.py ............ Auth + rate limiting
+└── External APIs
+    ├── Falcon (127.0.0.1:8092) ... AI tahmin motoru
+    └── Predator (127.0.0.1:8090) . Istatistiksel analiz
+```
+
+## Loglama
 
 ```bash
-# Basic health
-curl http://localhost:8000/api/v1/health
+# Uygulama loglari
+tail -f /root/eagle-api/logs/app.log
 
-# Cache statistics
-curl http://localhost:8000/api/v1/cache/stats
+# Gunicorn loglari
+tail -f /root/eagle-api/logs/gunicorn_error.log
+tail -f /root/eagle-api/logs/gunicorn_access.log
 
-# Data source health
-curl http://localhost:8000/api/v1/sources/health
+# Systemd loglari
+journalctl -u eagle-api -f
 ```
 
-### Logs
+## Sorun Giderme
 
+### API yanit vermiyor
 ```bash
-# Application logs
-tail -f logs/app.log
-
-# Gunicorn access logs
-tail -f logs/gunicorn_access.log
-
-# Gunicorn error logs
-tail -f logs/gunicorn_error.log
-
-# Systemd logs
-sudo journalctl -u golsinyali-api -f
+systemctl status eagle-api
+journalctl -u eagle-api -n 50
+# Restart
+systemctl restart eagle-api
 ```
 
-### Sentry Integration
-
-All 5xx errors are automatically sent to Sentry with:
-- Error details and stack traces
-- Request context
-- Custom error metadata
-
-## Development
-
-### Project Structure
-
-```
-golsinyali_api_mevcut/
-├── app.py                  # Flask application entry point
-├── config.py               # Configuration classes
-├── models.py               # Data models and validation
-├── http_client.py          # HTTP client with failover
-├── cache_utils.py          # Caching layer
-├── source_manager.py       # Health tracking and failover
-├── parsers.py              # Data parsers (static)
-├── live_parsers.py         # Data parsers (live)
-├── security.py             # Authentication
-├── background_tasks.py     # Background jobs
-├── routes/                 # API endpoints
-│   ├── matches.py
-│   ├── live.py
-│   ├── health.py
-│   ├── auth.py
-│   ├── leagues.py
-│   ├── teams.py
-│   └── utils.py
-├── analysis/               # Analysis modules
-│   ├── h2h.py
-│   ├── odds_analysis.py
-│   ├── team_performance.py
-│   └── final_predictions.py
-└── logs/                   # Application logs
-```
-
-### Adding a New Endpoint
-
-1. Create route in appropriate blueprint (`routes/*.py`)
-2. Use caching utilities from `routes/utils.py`
-3. Raise `APIError` for errors
-4. Register blueprint if new file
-
-### Testing
-
+### Redis cache temizleme
 ```bash
-# Health check
-curl http://localhost:8000/api/v1/health
-
-# Match details
-curl http://localhost:8000/api/v1/match/2804405
-
-# Today's matches
-curl http://localhost:8000/api/v1/matches/today
-
-# Live matches
-curl http://localhost:8000/api/v1/matches/live
+redis-cli -n 5 FLUSHDB
 ```
 
-## Performance
+### Poisson/Odds Movement calismiyor
+Analiz ciktisinda `_eagle_sources` alanini kontrol et:
+```bash
+curl -s -H "X-API-Key: <key>" http://127.0.0.1:8098/api/v1/match/2922237 \
+  | python3 -c "import json,sys; d=json.load(sys.stdin)['data']['analysis']['final_predictions']['_eagle_sources']; print(json.dumps(d, indent=2))"
+```
 
-### Current Metrics
+### Falcon/Predator baglantisi
+```bash
+curl -s -H "X-API-Key: <key>" http://127.0.0.1:8098/api/v1/eagle/status \
+  | python3 -m json.tool
+```
 
-- Cache hit rate: ~40% (target: >70%)
-- P50 response time: ~3s (target: <2s)
-- Failover time: 5-10s on source failure
+## Lisans
 
-### Optimizations
-
-- Connection pooling (20 connections per source)
-- Thread pool limiting (20 global workers)
-- Response compression (gzip)
-- Request deduplication
-- Smart cache TTLs
-
-## Security
-
-### Features
-
-- Rate limiting: 200/min, 3000/hour per IP
-- CORS: Configured for specific domains
-- JWT authentication (optional)
-- API key authentication for admin endpoints
-- Security headers (X-Frame-Options, HSTS, etc.)
-
-### Known Issues
-
-1. Admin endpoints (`/cache/clear`, `/sources/force-primary`) need API key protection
-2. API key comparison should use constant-time comparison
-
-## Dependencies
-
-### Core
-
-- Flask (Web framework)
-- Gunicorn + gevent (Production server)
-- Redis + flask-caching (Caching)
-- BeautifulSoup4 + lxml (Parsing)
-- requests (HTTP client)
-
-### Security
-
-- PyJWT (JWT tokens)
-- flask-limiter (Rate limiting)
-- flask-cors (CORS)
-
-### Monitoring
-
-- sentry-sdk (Error tracking)
-
-### Performance
-
-- flask-compress (Response compression)
-- boto3 (AWS Lambda integration)
-
-## License
-
-This project is proprietary software.
-
-## Support
-
-For issues and questions, please contact the development team.
+Ozel yazilim — AWA Stats
