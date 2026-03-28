@@ -1,0 +1,1097 @@
+{
+  "info": {
+    "name": "Golsinyali Football API",
+    "description": "High-performance football match data API. Multi-source failover, intelligent caching, comprehensive analysis.\n\n## Base URLs\n- Production: https://api.golsinyali.com/api/v1\n- Development: http://localhost:8000/api/v1\n\n## Authentication\nUse the 'Generate JWT Token' request first, then copy the `access_token` into the `jwt_token` collection variable.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "version": "1.0.0"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000/api/v1",
+      "type": "string",
+      "description": "API base URL. Change to https://api.golsinyali.com/api/v1 for production."
+    },
+    {
+      "key": "jwt_token",
+      "value": "",
+      "type": "string",
+      "description": "JWT Bearer token. Obtain via POST /auth/token."
+    },
+    {
+      "key": "api_key",
+      "value": "your-api-secret-key",
+      "type": "string",
+      "description": "API secret key. Set this to your actual API_SECRET_KEY."
+    },
+    {
+      "key": "match_id",
+      "value": "2804405",
+      "type": "string",
+      "description": "Example match ID. Change as needed."
+    },
+    {
+      "key": "league_id",
+      "value": "36",
+      "type": "string",
+      "description": "Example league ID (36 = Turkey Super Lig)."
+    },
+    {
+      "key": "season",
+      "value": "2024-2025",
+      "type": "string",
+      "description": "Season string. Format: YYYY-YYYY"
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{jwt_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "Authentication",
+      "description": "Generate JWT tokens for API access.",
+      "item": [
+        {
+          "name": "Generate JWT Token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"api_key\": \"{{api_key}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/token",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "token"]
+            },
+            "description": "Exchange an API key for a JWT Bearer token (expires in 1 hour).\n\nAfter running this request, copy the `access_token` from the response and set the `jwt_token` collection variable."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const response = pm.response.json();",
+                  "if (response.access_token) {",
+                  "    pm.collectionVariables.set('jwt_token', response.access_token);",
+                  "    console.log('JWT token saved to collection variable: jwt_token');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Matches",
+      "description": "Match data endpoints — details, H2H, odds, and date-based lists.",
+      "item": [
+        {
+          "name": "Get Match Details",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/match/{{match_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["match", "{{match_id}}"],
+              "query": [
+                {
+                  "key": "fields",
+                  "value": "",
+                  "description": "Optional: comma-separated fields to return (e.g. match_id,home_team,away_team)",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Get comprehensive match details including analysis (H2H summary, form, predictions).\n\nCache TTL: 60s (live), 5min (scheduled), 24h (finished)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Match H2H",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/match/{{match_id}}/h2h",
+              "host": ["{{base_url}}"],
+              "path": ["match", "{{match_id}}", "h2h"]
+            },
+            "description": "Detailed Head-to-Head data:\n- H2H match history (last 10)\n- Home team last 5 matches\n- Away team last 5 matches\n- Standings, injuries, lineups\n\nCache TTL: 24 hours"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Match Odds",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/match/{{match_id}}/odds",
+              "host": ["{{base_url}}"],
+              "path": ["match", "{{match_id}}", "odds"]
+            },
+            "description": "Detailed odds data:\n- Corner odds\n- Correct score odds\n- Double chance odds\n- First half odds\n- Odds comparison (multiple bookmakers)\n\nCache TTL: 15 minutes"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Matches by Date",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/matches/date/2026-02-19?sort_by_time=true",
+              "host": ["{{base_url}}"],
+              "path": ["matches", "date", "2026-02-19"],
+              "query": [
+                {
+                  "key": "sort_by_time",
+                  "value": "true",
+                  "description": "Sort matches by match time (default: true)"
+                }
+              ]
+            },
+            "description": "All matches for a specific date. Format: YYYY-MM-DD\n\nCache TTL: 5min (today/future), 24h (past)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Today's Matches",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/matches/today?sort_by_time=true",
+              "host": ["{{base_url}}"],
+              "path": ["matches", "today"],
+              "query": [
+                {
+                  "key": "sort_by_time",
+                  "value": "true"
+                }
+              ]
+            },
+            "description": "Shortcut for today's matches. Cache TTL: 5 minutes."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Tomorrow's Matches",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/matches/tomorrow",
+              "host": ["{{base_url}}"],
+              "path": ["matches", "tomorrow"]
+            },
+            "description": "Shortcut for tomorrow's matches. Cache TTL: 5 minutes."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Yesterday's Matches",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/matches/yesterday",
+              "host": ["{{base_url}}"],
+              "path": ["matches", "yesterday"]
+            },
+            "description": "Shortcut for yesterday's matches. Cache TTL: 24 hours (historical)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Live Matches",
+      "description": "Real-time live match data. All endpoints cached for 30 seconds (odds: 15 seconds).",
+      "item": [
+        {
+          "name": "Get All Live Matches",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/matches/live?include_stats=true&include_odds=true&include_corners=false",
+              "host": ["{{base_url}}"],
+              "path": ["matches", "live"],
+              "query": [
+                {
+                  "key": "include_stats",
+                  "value": "true",
+                  "description": "Include technical stats (shots, possession, etc.)"
+                },
+                {
+                  "key": "include_odds",
+                  "value": "true",
+                  "description": "Include live Bet365 odds"
+                },
+                {
+                  "key": "include_corners",
+                  "value": "false",
+                  "description": "Include corner stats (extra upstream call)"
+                },
+                {
+                  "key": "league_id",
+                  "value": "",
+                  "description": "Filter by league ID",
+                  "disabled": true
+                },
+                {
+                  "key": "only_live",
+                  "value": "false",
+                  "description": "true = only in-play matches; false = include upcoming",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "All currently live matches + upcoming (next 2h).\n\nCache TTL: 30 seconds"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Live Match Details",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/matches/live/{{match_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["matches", "live", "{{match_id}}"]
+            },
+            "description": "Complete live data for one match (stats + odds + events).\n\nCache TTL: 30 seconds"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Live Match Stats",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/matches/live/{{match_id}}/stats",
+              "host": ["{{base_url}}"],
+              "path": ["matches", "live", "{{match_id}}", "stats"]
+            },
+            "description": "Technical statistics: shots, possession, fouls, cards, attacks.\n\nCache TTL: 30 seconds"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Live Match Odds",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/matches/live/{{match_id}}/odds",
+              "host": ["{{base_url}}"],
+              "path": ["matches", "live", "{{match_id}}", "odds"]
+            },
+            "description": "Live Bet365 odds: Asian Handicap, 1X2, Over/Under, BTTS.\n\nCache TTL: 15 seconds (shortest — odds change frequently)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Live Match Corners",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/matches/live/{{match_id}}/corners",
+              "host": ["{{base_url}}"],
+              "path": ["matches", "live", "{{match_id}}", "corners"]
+            },
+            "description": "Corner statistics and corner betting odds.\n\nCache TTL: 30 seconds"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Live Match Events",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/matches/live/{{match_id}}/events",
+              "host": ["{{base_url}}"],
+              "path": ["matches", "live", "{{match_id}}", "events"]
+            },
+            "description": "Match event timeline: goals, cards, substitutions, VAR.\n\nCache TTL: 30 seconds"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Leagues — List",
+      "description": "League discovery endpoints. Most use static JSON — instant responses.",
+      "item": [
+        {
+          "name": "Get Today's Leagues",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/leagues",
+              "host": ["{{base_url}}"],
+              "path": ["leagues"]
+            },
+            "description": "Leagues that have at least one match today. Derived from today's match feed.\n\nCache TTL: 5 minutes"
+          },
+          "response": []
+        },
+        {
+          "name": "Get All Leagues",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/leagues/all",
+              "host": ["{{base_url}}"],
+              "path": ["leagues", "all"],
+              "query": [
+                {
+                  "key": "country",
+                  "value": "",
+                  "description": "Filter by country slug (e.g. england, turkey, spain)",
+                  "disabled": true
+                },
+                {
+                  "key": "type",
+                  "value": "",
+                  "description": "Filter by type: league, subleague, cup",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "All leagues from static database organized by country. Instant response (no upstream call)."
+          },
+          "response": []
+        },
+        {
+          "name": "Get All Leagues (England only)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/leagues/all?country=england",
+              "host": ["{{base_url}}"],
+              "path": ["leagues", "all"],
+              "query": [
+                {
+                  "key": "country",
+                  "value": "england"
+                }
+              ]
+            },
+            "description": "Filter leagues by country."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Top Leagues",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/leagues/top",
+              "host": ["{{base_url}}"],
+              "path": ["leagues", "top"]
+            },
+            "description": "Top leagues (Big 5 + others) and major cups. Instant response."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Countries",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/leagues/countries",
+              "host": ["{{base_url}}"],
+              "path": ["leagues", "countries"]
+            },
+            "description": "All countries with league counts, sorted by league count descending."
+          },
+          "response": []
+        },
+        {
+          "name": "Lookup League by ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/leagues/{{league_id}}/lookup",
+              "host": ["{{base_url}}"],
+              "path": ["leagues", "{{league_id}}", "lookup"]
+            },
+            "description": "Find a league by its numeric ID in the static database."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Leagues — Data",
+      "description": "Detailed league data: standings, fixtures, stats. Data from football.nowgoal26.com.",
+      "item": [
+        {
+          "name": "Get League Info",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/leagues/{{league_id}}/info",
+              "host": ["{{base_url}}"],
+              "path": ["leagues", "{{league_id}}", "info"]
+            },
+            "description": "League metadata: available seasons, sub-leagues, cup detection.\n\nCache TTL: 7 days"
+          },
+          "response": []
+        },
+        {
+          "name": "Get League Standings",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/leagues/{{league_id}}/standings?season={{season}}&type=overall",
+              "host": ["{{base_url}}"],
+              "path": ["leagues", "{{league_id}}", "standings"],
+              "query": [
+                {
+                  "key": "season",
+                  "value": "{{season}}",
+                  "description": "REQUIRED. Season string, e.g. 2024-2025"
+                },
+                {
+                  "key": "type",
+                  "value": "overall",
+                  "description": "Standings type: overall, home, away"
+                },
+                {
+                  "key": "sub_league_id",
+                  "value": "",
+                  "description": "Sub-league ID for leagues with groups",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "League table with positions, W/D/L, goals, points, and promotion/relegation zones.\n\nCache TTL: 12 hours"
+          },
+          "response": []
+        },
+        {
+          "name": "Get League Standings (Home)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/leagues/{{league_id}}/standings?season={{season}}&type=home",
+              "host": ["{{base_url}}"],
+              "path": ["leagues", "{{league_id}}", "standings"],
+              "query": [
+                {
+                  "key": "season",
+                  "value": "{{season}}"
+                },
+                {
+                  "key": "type",
+                  "value": "home"
+                }
+              ]
+            },
+            "description": "Home-only standings."
+          },
+          "response": []
+        },
+        {
+          "name": "Get League Fixtures",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/leagues/{{league_id}}/matches?season={{season}}",
+              "host": ["{{base_url}}"],
+              "path": ["leagues", "{{league_id}}", "matches"],
+              "query": [
+                {
+                  "key": "season",
+                  "value": "{{season}}",
+                  "description": "REQUIRED. Season string"
+                },
+                {
+                  "key": "round",
+                  "value": "",
+                  "description": "Optional: filter to a specific round number",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "All season fixtures/results. Filter by round with ?round=22\n\nCache TTL: 48 hours"
+          },
+          "response": []
+        },
+        {
+          "name": "Get League Fixtures (Round 22)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/leagues/{{league_id}}/matches?season={{season}}&round=22",
+              "host": ["{{base_url}}"],
+              "path": ["leagues", "{{league_id}}", "matches"],
+              "query": [
+                {
+                  "key": "season",
+                  "value": "{{season}}"
+                },
+                {
+                  "key": "round",
+                  "value": "22"
+                }
+              ]
+            },
+            "description": "Fixtures for a specific round."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Full League Data",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/leagues/{{league_id}}/full?season={{season}}",
+              "host": ["{{base_url}}"],
+              "path": ["leagues", "{{league_id}}", "full"],
+              "query": [
+                {
+                  "key": "season",
+                  "value": "{{season}}",
+                  "description": "REQUIRED. Season string"
+                }
+              ]
+            },
+            "description": "Combined: standings + all fixtures in one call. Reduces client round-trips.\n\nCache TTL: 12 hours"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Current Round",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/leagues/{{league_id}}/current-round?season={{season}}",
+              "host": ["{{base_url}}"],
+              "path": ["leagues", "{{league_id}}", "current-round"],
+              "query": [
+                {
+                  "key": "season",
+                  "value": "{{season}}"
+                }
+              ]
+            },
+            "description": "Current and last completed round numbers.\n\nCache TTL: 12 hours"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Team Statistics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/leagues/{{league_id}}/team-stats?season={{season}}&type=total",
+              "host": ["{{base_url}}"],
+              "path": ["leagues", "{{league_id}}", "team-stats"],
+              "query": [
+                {
+                  "key": "season",
+                  "value": "{{season}}"
+                },
+                {
+                  "key": "type",
+                  "value": "total",
+                  "description": "total, home, or guest"
+                }
+              ]
+            },
+            "description": "Team-level stats: goals, shots, clean sheets, etc.\n\nCache TTL: 12 hours"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Player Statistics (Top Scorers)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/leagues/{{league_id}}/player-stats?season={{season}}&category=offensive",
+              "host": ["{{base_url}}"],
+              "path": ["leagues", "{{league_id}}", "player-stats"],
+              "query": [
+                {
+                  "key": "season",
+                  "value": "{{season}}"
+                },
+                {
+                  "key": "category",
+                  "value": "offensive",
+                  "description": "offensive, passing, defensive, summary"
+                }
+              ]
+            },
+            "description": "Player statistics. Category options:\n- `offensive`: Goals, shots\n- `passing`: Assists, key passes\n- `defensive`: Tackles, interceptions\n- `summary`: Combined overview\n\nCache TTL: 24 hours"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Handicap Statistics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/leagues/{{league_id}}/handicap-stats?season={{season}}",
+              "host": ["{{base_url}}"],
+              "path": ["leagues", "{{league_id}}", "handicap-stats"],
+              "query": [
+                {
+                  "key": "season",
+                  "value": "{{season}}"
+                }
+              ]
+            },
+            "description": "Asian handicap and over/under league aggregates.\n\nCache TTL: 12 hours"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Health & Monitoring",
+      "description": "Health checks and admin endpoints. Admin endpoints require authentication.",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": ["{{base_url}}"],
+              "path": ["health"]
+            },
+            "description": "Basic liveness probe. No auth required. Used by load balancers."
+          },
+          "response": []
+        },
+        {
+          "name": "Detailed Health Check",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health/detailed",
+              "host": ["{{base_url}}"],
+              "path": ["health", "detailed"]
+            },
+            "description": "Cache health, background task status, leader election info."
+          },
+          "response": []
+        },
+        {
+          "name": "Cache Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/cache/status",
+              "host": ["{{base_url}}"],
+              "path": ["cache", "status"]
+            },
+            "description": "Cache configuration: type, Redis host/port, default TTL."
+          },
+          "response": []
+        },
+        {
+          "name": "Cache Statistics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/cache/stats",
+              "host": ["{{base_url}}"],
+              "path": ["cache", "stats"]
+            },
+            "description": "Cache performance metrics: hit rate, stale served, dedup hits."
+          },
+          "response": []
+        },
+        {
+          "name": "Clear Cache (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}",
+                "description": "Admin API key"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/cache/clear",
+              "host": ["{{base_url}}"],
+              "path": ["cache", "clear"]
+            },
+            "description": "⚠️ Clears ALL cached data. Next requests will be slower (cold cache). Requires auth."
+          },
+          "response": []
+        },
+        {
+          "name": "Reset Cache Stats (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/cache/stats/reset",
+              "host": ["{{base_url}}"],
+              "path": ["cache", "stats", "reset"]
+            },
+            "description": "Reset all cache stat counters to zero. Requires auth."
+          },
+          "response": []
+        },
+        {
+          "name": "Data Sources Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/sources/health",
+              "host": ["{{base_url}}"],
+              "path": ["sources", "health"]
+            },
+            "description": "Multi-source health metrics: error rates, consecutive failures, priority scores."
+          },
+          "response": []
+        },
+        {
+          "name": "Force Primary Source (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source_url\": \"https://www.goaloo.com\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/sources/force-primary",
+              "host": ["{{base_url}}"],
+              "path": ["sources", "force-primary"]
+            },
+            "description": "Manually override the primary data source. Requires auth.\n\nAvailable sources:\n- https://live3.nowgoal26.com (default primary)\n- https://www.nowgoal.com\n- https://www.goaloo.com"
+          },
+          "response": []
+        },
+        {
+          "name": "Reset Source Metrics (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/sources/reset-metrics",
+              "host": ["{{base_url}}"],
+              "path": ["sources", "reset-metrics"]
+            },
+            "description": "Reset health metrics for all sources. Omit source_url to reset ALL. Requires auth.\n\nTo reset a specific source, set body to:\n```json\n{\"source_url\": \"https://www.nowgoal.com\"}\n```"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Quick Tests",
+      "description": "Smoke tests to quickly verify the API is working.",
+      "item": [
+        {
+          "name": "🟢 Health Check",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": ["{{base_url}}"],
+              "path": ["health"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is healthy', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.status).to.equal('healthy');",
+                  "});",
+                  "pm.test('Response time < 500ms', function() {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(500);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "🟢 Today Matches",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/matches/today",
+              "host": ["{{base_url}}"],
+              "path": ["matches", "today"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', function() { pm.response.to.have.status(200); });",
+                  "pm.test('Response has matches array', function() {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.true;",
+                  "    pm.expect(json.data.matches).to.be.an('array');",
+                  "});",
+                  "pm.test('Response time < 5000ms', function() {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "🟢 Live Matches",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/matches/live",
+              "host": ["{{base_url}}"],
+              "path": ["matches", "live"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', function() { pm.response.to.have.status(200); });",
+                  "pm.test('Response has live matches', function() {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.true;",
+                  "    pm.expect(json.data.matches).to.be.an('array');",
+                  "    pm.expect(json.data.meta).to.have.property('total_matches');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "🟢 Super Lig Standings",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/leagues/36/standings?season=2024-2025",
+              "host": ["{{base_url}}"],
+              "path": ["leagues", "36", "standings"],
+              "query": [
+                {
+                  "key": "season",
+                  "value": "2024-2025"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', function() { pm.response.to.have.status(200); });",
+                  "pm.test('Standings array present', function() {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.true;",
+                  "    pm.expect(json.data.standings).to.be.an('array');",
+                  "    pm.expect(json.data.standings.length).to.be.above(0);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "🟢 Cache Stats",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/cache/stats",
+              "host": ["{{base_url}}"],
+              "path": ["cache", "stats"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', function() { pm.response.to.have.status(200); });",
+                  "pm.test('Cache stats structure ok', function() {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.data).to.have.property('hits');",
+                  "    pm.expect(json.data).to.have.property('hit_rate');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "🔴 Invalid Match ID (expect 404/503)",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/match/9999999",
+              "host": ["{{base_url}}"],
+              "path": ["match", "9999999"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Returns error status', function() {",
+                  "    pm.expect([404, 503]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test('Error response structure ok', function() {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.false;",
+                  "    pm.expect(json).to.have.property('error');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    }
+  ]
+}

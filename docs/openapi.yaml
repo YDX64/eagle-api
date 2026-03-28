@@ -1,0 +1,3149 @@
+openapi: 3.0.3
+info:
+  title: Golsinyali Football API
+  description: |
+    High-performance football match data API with multi-source failover, intelligent caching, and comprehensive analysis features.
+
+    ## Features
+    - **Multi-Source Failover:** Primary (nowgoal26.com) → Fallback (nowgoal.com → goaloo.com)
+    - **Hybrid Caching:** Redis primary + in-memory fallback with stale-while-revalidate
+    - **Real-Time Data:** Live match data refreshed every 30 seconds
+    - **Comprehensive Analysis:** H2H, odds, predictions, team performance, tactics
+
+    ## Rate Limiting
+    - **200 requests/minute** per IP
+    - **3000 requests/hour** per IP
+    - Rate limit headers returned on every response:
+      - `X-RateLimit-Limit`: Request limit per window
+      - `X-RateLimit-Remaining`: Remaining requests in current window
+      - `X-RateLimit-Reset`: Unix timestamp when window resets
+    - On limit exceeded: HTTP 429 with `Retry-After` header
+
+    ## Authentication
+    Two authentication methods are supported:
+
+    **JWT Bearer Token** (recommended):
+    ```
+    POST /api/v1/auth/token  →  {"access_token": "...", "token_type": "Bearer"}
+    Authorization: Bearer <token>
+    ```
+
+    **API Key** (header):
+    ```
+    X-API-Key: <your-api-key>
+    ```
+
+    Most read endpoints are public. Admin endpoints (cache clear, source management) require authentication.
+
+    ## Caching
+    All responses include cache metadata. TTLs by data type:
+    | Data Type | TTL |
+    |-----------|-----|
+    | Live matches | 30 seconds |
+    | Live odds | 15 seconds |
+    | Match details (live) | 60 seconds |
+    | Match details (finished) | 24 hours |
+    | H2H data | 24 hours |
+    | Odds data | 15 minutes |
+    | League standings | 12 hours |
+    | League matches | 48 hours |
+    | Player stats | 24 hours |
+
+    ## Error Format
+    All errors return JSON:
+    ```json
+    {
+      "error": "Human-readable message",
+      "status_code": 404,
+      "success": false,
+      "timestamp": "2026-02-19T10:00:00Z"
+    }
+    ```
+
+  version: 1.0.0
+  contact:
+    name: Golsinyali API Support
+    email: api@golsinyali.com
+  license:
+    name: Proprietary
+    url: https://golsinyali.com/terms
+
+servers:
+  - url: https://api.golsinyali.com/api/v1
+    description: Production server
+  - url: http://localhost:8000/api/v1
+    description: Development server
+
+tags:
+  - name: Matches
+    description: |
+      Match data endpoints. Returns scheduled, live and finished match information.
+      Cache TTL varies by match status: live (60s), future (5min), finished (24h).
+  - name: Live
+    description: |
+      Real-time live match data updated every 30 seconds.
+      Includes stats, odds (Bet365), corners, and events.
+  - name: Leagues
+    description: |
+      League list and metadata endpoints. League data loaded from static JSON file
+      (`data/leagues.json`) — no upstream call required.
+  - name: League Data
+    description: |
+      Detailed league data: standings, fixtures, team stats, player stats, handicap stats.
+      Data fetched from football.nowgoal26.com with long cache TTLs (12-48 hours).
+  - name: Health
+    description: |
+      Health check and monitoring endpoints.
+      Admin endpoints (cache/clear, sources/force-primary) require authentication.
+  - name: Authentication
+    description: Generate JWT tokens for API access.
+
+paths:
+  # ============================================================================
+  # MATCH ENDPOINTS
+  # ============================================================================
+  /match/{match_id}:
+    get:
+      tags:
+        - Matches
+      summary: Get match details
+      description: |
+        Get comprehensive match details including team info, statistics and analysis.
+
+        **Note:** Heavy raw data (H2H details, raw odds) are excluded from this response.
+        Use `/match/{match_id}/h2h` for detailed H2H data.
+        Use `/match/{match_id}/odds` for detailed odds data.
+
+        **Cache TTL:**
+        - Live match: 60 seconds
+        - Finished match: 24 hours
+        - Scheduled match: 5 minutes
+      operationId: getMatchDetails
+      x-cache-ttl:
+        live: 60
+        finished: 86400
+        scheduled: 300
+      parameters:
+        - name: match_id
+          in: path
+          required: true
+          description: Unique match identifier
+          schema:
+            type: integer
+            example: 2804405
+        - name: fields
+          in: query
+          required: false
+          description: |
+            Comma-separated list of fields to return. When omitted, all fields are returned.
+            Example: `match_id,home_team,away_team,home_score,away_score`
+          schema:
+            type: string
+            example: "match_id,home_team,away_team"
+      responses:
+        '200':
+          description: Match details retrieved successfully
+          headers:
+            X-Cache-TTL:
+              description: Cache TTL in seconds
+              schema:
+                type: integer
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/X-RateLimit-Limit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/X-RateLimit-Remaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/X-RateLimit-Reset'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchDetailsResponse'
+              example:
+                success: true
+                timestamp: "2026-02-19T10:00:00Z"
+                data:
+                  match_id: 2804405
+                  home_team: "Galatasaray"
+                  away_team: "Fenerbahce"
+                  home_team_id: 1234
+                  away_team_id: 5678
+                  home_score: 2
+                  away_score: 1
+                  match_time: "2026-02-19T19:00:00Z"
+                  status: "finished"
+                  league_id: 36
+                  league_name: "Turkey Super Lig"
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /match/{match_id}/h2h:
+    get:
+      tags:
+        - Matches
+      summary: Get match H2H details
+      description: |
+        Get detailed Head-to-Head information including:
+        - Head-to-head match history (last 10 meetings)
+        - Home team previous matches (last 5)
+        - Away team previous matches (last 5)
+        - Team standings in current league
+        - Injuries and suspensions
+        - Last match lineups
+
+        **Cache TTL:** 24 hours (H2H data is stable)
+      operationId: getMatchH2H
+      x-cache-ttl: 86400
+      parameters:
+        - name: match_id
+          in: path
+          required: true
+          description: Unique match identifier
+          schema:
+            type: integer
+            example: 2804405
+      responses:
+        '200':
+          description: H2H data retrieved successfully
+          headers:
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/X-RateLimit-Limit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/X-RateLimit-Remaining'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/H2HResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /match/{match_id}/odds:
+    get:
+      tags:
+        - Matches
+      summary: Get match odds
+      description: |
+        Get detailed odds information including:
+        - Corner odds (corner betting markets)
+        - Correct score odds (exact score predictions)
+        - Double chance odds (combined outcome betting)
+        - First half odds (half-time betting markets)
+        - Odds comparison from multiple bookmakers
+
+        **Cache TTL:** 15 minutes
+      operationId: getMatchOdds
+      x-cache-ttl: 900
+      parameters:
+        - name: match_id
+          in: path
+          required: true
+          description: Unique match identifier
+          schema:
+            type: integer
+            example: 2804405
+      responses:
+        '200':
+          description: Odds data retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OddsResponse'
+        '404':
+          description: Odds not available for this match
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /matches/date/{date}:
+    get:
+      tags:
+        - Matches
+      summary: Get matches by date
+      description: |
+        Get all matches for a specific date, organized by league.
+
+        **Cache TTL:**
+        - Today / future dates: 5 minutes
+        - Past dates: 24 hours
+      operationId: getMatchesByDate
+      x-cache-ttl:
+        today: 300
+        past: 86400
+      parameters:
+        - name: date
+          in: path
+          required: true
+          description: Date in YYYY-MM-DD format
+          schema:
+            type: string
+            format: date
+            example: "2026-02-19"
+        - name: sort_by_time
+          in: query
+          required: false
+          description: Sort matches chronologically by match time
+          schema:
+            type: boolean
+            default: true
+      responses:
+        '200':
+          description: Matches retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DateMatchesResponse'
+              example:
+                success: true
+                data:
+                  date: "2026-02-19"
+                  total_matches: 42
+                  matches:
+                    - match_id: 2804405
+                      home_team: "Arsenal"
+                      away_team: "Chelsea"
+                      home_score: null
+                      away_score: null
+                      match_time: "2026-02-19T20:00:00Z"
+                      status: "scheduled"
+                      league_id: 1
+                      league_name: "England Premier League"
+                  leagues:
+                    "1":
+                      league_name: "England Premier League"
+                      league_code: "premier-league"
+                      match_count: 5
+        '400':
+          description: Invalid date format
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Invalid date format. Use YYYY-MM-DD"
+                status_code: 400
+                success: false
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /matches/today:
+    get:
+      tags:
+        - Matches
+      summary: Get today's matches
+      description: Shortcut for `/matches/date/{today}`. Cache TTL: 5 minutes.
+      operationId: getTodayMatches
+      x-cache-ttl: 300
+      parameters:
+        - name: sort_by_time
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: true
+      responses:
+        '200':
+          description: Today's matches
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DateMatchesResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /matches/tomorrow:
+    get:
+      tags:
+        - Matches
+      summary: Get tomorrow's matches
+      description: Shortcut for `/matches/date/{tomorrow}`. Cache TTL: 5 minutes.
+      operationId: getTomorrowMatches
+      x-cache-ttl: 300
+      parameters:
+        - name: sort_by_time
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: true
+      responses:
+        '200':
+          description: Tomorrow's matches
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DateMatchesResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /matches/yesterday:
+    get:
+      tags:
+        - Matches
+      summary: Get yesterday's matches
+      description: Shortcut for `/matches/date/{yesterday}`. Cache TTL: 24 hours (historical data).
+      operationId: getYesterdayMatches
+      x-cache-ttl: 86400
+      parameters:
+        - name: sort_by_time
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: true
+      responses:
+        '200':
+          description: Yesterday's matches
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DateMatchesResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  # ============================================================================
+  # LIVE MATCH ENDPOINTS
+  # ============================================================================
+  /matches/live:
+    get:
+      tags:
+        - Live
+      summary: Get all live matches
+      description: |
+        Get all currently live matches with real-time statistics and odds.
+        Also includes matches starting within the next 2 hours (upcoming).
+
+        **Cache TTL:** 30 seconds
+
+        **Data sources:**
+        - Match list: `bf_en-idn.js`
+        - Technical stats: `detail.js`
+        - Live odds (Bet365): `runOddsData_8.txt`
+        - Corner stats: `sbCorner.js`
+      operationId: getLiveMatches
+      x-cache-ttl: 30
+      parameters:
+        - name: include_stats
+          in: query
+          description: Include technical statistics (shots, possession, etc.)
+          schema:
+            type: boolean
+            default: true
+        - name: include_odds
+          in: query
+          description: Include live Bet365 odds (Asian Handicap, 1X2, O/U)
+          schema:
+            type: boolean
+            default: true
+        - name: include_corners
+          in: query
+          description: Include corner statistics. Adds extra upstream call.
+          schema:
+            type: boolean
+            default: false
+        - name: league_id
+          in: query
+          description: Filter results to a specific league
+          schema:
+            type: integer
+            example: 1
+        - name: only_live
+          in: query
+          description: |
+            When `true`, returns only matches currently in play.
+            When `false` (default), also includes upcoming matches (next 2 hours).
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Live matches retrieved successfully
+          headers:
+            X-Cache-TTL:
+              description: Cache TTL in seconds (30)
+              schema:
+                type: integer
+                example: 30
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LiveMatchesResponse'
+              example:
+                success: true
+                data:
+                  matches:
+                    - match_id: 2804405
+                      home_team: "Arsenal"
+                      away_team: "Chelsea"
+                      home_score: 1
+                      away_score: 0
+                      minute: 67
+                      is_live: true
+                      status: "2H"
+                      league_id: 1
+                      league_name: "England Premier League"
+                      stats:
+                        possession:
+                          home: 55
+                          away: 45
+                        shots:
+                          home: 8
+                          away: 5
+                      odds:
+                        asian_handicap:
+                          home: 1.85
+                          line: -0.5
+                          away: 2.05
+                  meta:
+                    total_matches: 15
+                    live_count: 12
+                    last_update: "2026-02-19T10:00:00Z"
+                    cache_ttl: 30
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /matches/live/{match_id}:
+    get:
+      tags:
+        - Live
+      summary: Get live match details
+      description: |
+        Get complete live data for a specific match including stats, odds, and events.
+
+        **Cache TTL:** 30 seconds
+      operationId: getLiveMatchDetails
+      x-cache-ttl: 30
+      parameters:
+        - name: match_id
+          in: path
+          required: true
+          description: Match identifier
+          schema:
+            type: integer
+            example: 2804405
+      responses:
+        '200':
+          description: Live match details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LiveMatchDetailResponse'
+        '404':
+          description: Match not found or not currently live
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /matches/live/{match_id}/stats:
+    get:
+      tags:
+        - Live
+      summary: Get live match statistics
+      description: |
+        Technical statistics for a specific live match:
+        - Shots (total, on target, off target)
+        - Ball possession (%)
+        - Corners
+        - Fouls
+        - Yellow / Red cards
+        - Attacks & Dangerous attacks
+        - Passes & Pass accuracy
+
+        **Cache TTL:** 30 seconds
+      operationId: getLiveMatchStats
+      x-cache-ttl: 30
+      parameters:
+        - name: match_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 2804405
+      responses:
+        '200':
+          description: Live match statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LiveStatsResponse'
+              example:
+                success: true
+                data:
+                  match_id: 2804405
+                  cache_ttl: 30
+                  stats:
+                    possession:
+                      home: 55
+                      away: 45
+                    shots:
+                      home: 8
+                      away: 5
+                    shots_on_target:
+                      home: 3
+                      away: 2
+                    corners:
+                      home: 4
+                      away: 2
+                    fouls:
+                      home: 7
+                      away: 9
+                    yellow_cards:
+                      home: 1
+                      away: 2
+                    red_cards:
+                      home: 0
+                      away: 0
+                    attacks:
+                      home: 45
+                      away: 38
+                    dangerous_attacks:
+                      home: 18
+                      away: 12
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /matches/live/{match_id}/odds:
+    get:
+      tags:
+        - Live
+      summary: Get live match odds
+      description: |
+        Live odds from **Bet365** for a specific match:
+        - Asian Handicap (home, line, away)
+        - Match Result 1X2 (home, draw, away)
+        - Over/Under goals (over, line, under)
+        - Both Teams to Score (yes/no)
+        - Double Chance
+
+        **Cache TTL:** 15 seconds (odds change frequently)
+      operationId: getLiveMatchOdds
+      x-cache-ttl: 15
+      parameters:
+        - name: match_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 2804405
+      responses:
+        '200':
+          description: Live odds
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LiveOddsResponse'
+              example:
+                success: true
+                data:
+                  match_id: 2804405
+                  bookmaker: "Bet365"
+                  cache_ttl: 15
+                  odds:
+                    asian_handicap:
+                      home: 1.85
+                      line: -0.5
+                      away: 2.05
+                    match_result:
+                      home: 1.60
+                      draw: 3.80
+                      away: 5.50
+                    over_under:
+                      over: 2.10
+                      line: 2.5
+                      under: 1.75
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /matches/live/{match_id}/corners:
+    get:
+      tags:
+        - Live
+      summary: Get live match corner statistics
+      description: |
+        Corner statistics for a specific live match:
+        - Total corners (home / away)
+        - First half corners
+        - Corner betting odds (over/under, handicap)
+
+        **Cache TTL:** 30 seconds
+      operationId: getLiveMatchCorners
+      x-cache-ttl: 30
+      parameters:
+        - name: match_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 2804405
+      responses:
+        '200':
+          description: Corner statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LiveCornersResponse'
+              example:
+                success: true
+                data:
+                  match_id: 2804405
+                  cache_ttl: 30
+                  corners:
+                    total:
+                      home: 4
+                      away: 2
+                    first_half:
+                      home: 2
+                      away: 1
+                    odds:
+                      over_under:
+                        line: 9.5
+                        over: 1.90
+                        under: 1.90
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /matches/live/{match_id}/events:
+    get:
+      tags:
+        - Live
+      summary: Get live match events
+      description: |
+        Timeline of match events for a specific live match:
+        - Goals (including own goals, penalties)
+        - Yellow / Red cards
+        - Substitutions
+        - VAR decisions
+
+        **Cache TTL:** 30 seconds
+      operationId: getLiveMatchEvents
+      x-cache-ttl: 30
+      parameters:
+        - name: match_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 2804405
+      responses:
+        '200':
+          description: Match events timeline
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LiveEventsResponse'
+              example:
+                success: true
+                data:
+                  match_id: 2804405
+                  cache_ttl: 30
+                  events:
+                    - minute: 23
+                      type: "goal"
+                      team: "home"
+                      player: "Saka"
+                      assist: "Odegaard"
+                      score: "1-0"
+                    - minute: 45
+                      type: "yellow_card"
+                      team: "away"
+                      player: "Reece James"
+                    - minute: 67
+                      type: "substitution"
+                      team: "home"
+                      player: "Martinelli"
+                      assist: "Nketiah"
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  # ============================================================================
+  # LEAGUE LIST ENDPOINTS
+  # ============================================================================
+  /leagues:
+    get:
+      tags:
+        - Leagues
+      summary: Get leagues from today's matches
+      description: |
+        Returns leagues that have at least one match today.
+        Data is derived from today's match feed (not static JSON).
+
+        **Cache TTL:** 5 minutes (same as today's matches)
+      operationId: getLeagues
+      x-cache-ttl: 300
+      responses:
+        '200':
+          description: Leagues with today's matches
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaguesListResponse'
+              example:
+                success: true
+                data:
+                  count: 12
+                  leagues:
+                    - id: "1"
+                      name: "England Premier League"
+                      code: "premier-league"
+                    - id: "36"
+                      name: "Turkey Super Lig"
+                      code: "super-lig"
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /leagues/all:
+    get:
+      tags:
+        - Leagues
+      summary: Get all available leagues
+      description: |
+        Returns all leagues from the static database (`data/leagues.json`).
+        No upstream call — instant response.
+
+        Organized by country with optional filters.
+      operationId: getAllLeagues
+      parameters:
+        - name: country
+          in: query
+          description: Filter by country slug (e.g., `england`, `turkey`, `spain`)
+          schema:
+            type: string
+            example: "england"
+        - name: type
+          in: query
+          description: Filter by league type
+          schema:
+            type: string
+            enum: [league, subleague, cup]
+            example: "league"
+      responses:
+        '200':
+          description: All leagues
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AllLeaguesResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /leagues/top:
+    get:
+      tags:
+        - Leagues
+      summary: Get top/popular leagues
+      description: |
+        Returns top leagues (Big 5 + others) and major cups from static data.
+        No upstream call — instant response.
+      operationId: getTopLeagues
+      responses:
+        '200':
+          description: Top leagues and major cups
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopLeaguesResponse'
+              example:
+                success: true
+                data:
+                  count: 10
+                  top_leagues:
+                    - id: 1
+                      name: "England Premier League"
+                      code: "premier-league"
+                      country: "england"
+                      type: "league"
+                    - id: 4
+                      name: "Spain La Liga"
+                      code: "la-liga"
+                      country: "spain"
+                      type: "league"
+                  major_cups:
+                    - id: 100
+                      name: "UEFA Champions League"
+                      code: "champions-league"
+                      type: "cup"
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /leagues/countries:
+    get:
+      tags:
+        - Leagues
+      summary: Get list of countries with leagues
+      description: Returns all countries that have at least one league in the database, sorted by league count.
+      operationId: getCountries
+      responses:
+        '200':
+          description: Countries with league counts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CountriesResponse'
+              example:
+                success: true
+                data:
+                  count: 85
+                  countries:
+                    - code: "england"
+                      name: "England"
+                      league_count: 8
+                    - code: "germany"
+                      name: "Germany"
+                      league_count: 6
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /leagues/{league_id}/lookup:
+    get:
+      tags:
+        - Leagues
+      summary: Lookup league by ID
+      description: |
+        Look up a league by its numeric ID in the static database.
+        Returns the league object and which section it was found in.
+      operationId: lookupLeague
+      parameters:
+        - name: league_id
+          in: path
+          required: true
+          description: League numeric ID
+          schema:
+            type: integer
+            example: 36
+      responses:
+        '200':
+          description: League found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeagueLookupResponse'
+              example:
+                success: true
+                data:
+                  found_in: "leagues.turkey"
+                  league:
+                    id: 36
+                    name: "Turkey Super Lig"
+                    code: "super-lig"
+                    country: "turkey"
+                    type: "league"
+        '404':
+          description: League not found in database
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  # ============================================================================
+  # LEAGUE DATA ENDPOINTS
+  # ============================================================================
+  /leagues/{league_id}/info:
+    get:
+      tags:
+        - League Data
+      summary: Get league metadata
+      description: |
+        Returns league info including available seasons, sub-leagues, and whether it's a cup competition.
+
+        **Cache TTL:** 7 days
+      operationId: getLeagueInfo
+      x-cache-ttl: 604800
+      parameters:
+        - name: league_id
+          in: path
+          required: true
+          description: League numeric ID
+          schema:
+            type: integer
+            example: 36
+      responses:
+        '200':
+          description: League info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeagueInfoResponse'
+              example:
+                success: true
+                data:
+                  league_id: 36
+                  code: "super-lig"
+                  name: "Turkey Super Lig"
+                  type: "league"
+                  country: "turkey"
+                  has_subleague: false
+                  is_cup: false
+                  current_season: "2024-2025"
+                  available_seasons:
+                    - "2024-2025"
+                    - "2023-2024"
+                    - "2022-2023"
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /leagues/{league_id}/standings:
+    get:
+      tags:
+        - League Data
+      summary: Get league standings
+      description: |
+        Returns the league table with team positions, points, W/D/L, goals, and zones
+        (promotion, relegation, European spots).
+
+        **Cache TTL:** 12 hours
+      operationId: getLeagueStandings
+      x-cache-ttl: 43200
+      parameters:
+        - name: league_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 36
+        - name: season
+          in: query
+          required: true
+          description: Season identifier (e.g. `2024-2025`)
+          schema:
+            type: string
+            example: "2024-2025"
+        - name: type
+          in: query
+          required: false
+          description: Standings type — overall table, home-only, or away-only
+          schema:
+            type: string
+            enum: [overall, home, away]
+            default: overall
+        - name: sub_league_id
+          in: query
+          required: false
+          description: Sub-league/group ID (for leagues with groups or conferences)
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: League standings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StandingsResponse'
+              example:
+                success: true
+                data:
+                  league:
+                    id: 36
+                    name: "Turkey Super Lig"
+                    season: "2024-2025"
+                  standings_type: "overall"
+                  teams_count: 19
+                  standings:
+                    - position: 1
+                      team_id: 1234
+                      team_name: "Galatasaray"
+                      played: 22
+                      won: 16
+                      drawn: 4
+                      lost: 2
+                      goals_for: 52
+                      goals_against: 18
+                      goal_difference: 34
+                      points: 52
+                  zones:
+                    champions_league:
+                      - 1
+                      - 2
+                    relegation:
+                      - 17
+                      - 18
+                      - 19
+        '400':
+          description: Missing required `season` parameter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /leagues/{league_id}/matches:
+    get:
+      tags:
+        - League Data
+      summary: Get league fixtures/results
+      description: |
+        Returns all matches for a season, optionally filtered by round number.
+
+        **Cache TTL:** 48 hours
+      operationId: getLeagueMatches
+      x-cache-ttl: 172800
+      parameters:
+        - name: league_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 36
+        - name: season
+          in: query
+          required: true
+          description: Season identifier
+          schema:
+            type: string
+            example: "2024-2025"
+        - name: round
+          in: query
+          required: false
+          description: Filter to a specific round number. Omit for all rounds.
+          schema:
+            type: integer
+            example: 22
+        - name: sub_league_id
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: League fixtures
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeagueMatchesResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /leagues/{league_id}/full:
+    get:
+      tags:
+        - League Data
+      summary: Get complete league data
+      description: |
+        Combined response: standings + all fixtures in a single call.
+        Useful for full league views to avoid two separate requests.
+
+        **Cache TTL:** 12 hours
+      operationId: getLeagueFull
+      x-cache-ttl: 43200
+      parameters:
+        - name: league_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 36
+        - name: season
+          in: query
+          required: true
+          schema:
+            type: string
+            example: "2024-2025"
+      responses:
+        '200':
+          description: Full league data (standings + fixtures)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeagueFullResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /leagues/{league_id}/current-round:
+    get:
+      tags:
+        - League Data
+      summary: Get current/latest round
+      description: |
+        Returns the current round number, last completed round, and whether the season is complete.
+
+        **Cache TTL:** 12 hours
+      operationId: getCurrentRound
+      x-cache-ttl: 43200
+      parameters:
+        - name: league_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 36
+        - name: season
+          in: query
+          required: true
+          schema:
+            type: string
+            example: "2024-2025"
+      responses:
+        '200':
+          description: Current round info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentRoundResponse'
+              example:
+                success: true
+                data:
+                  league_id: 36
+                  season: "2024-2025"
+                  current_round: 22
+                  next_round: 23
+                  last_completed_round: 21
+                  total_rounds: 38
+                  season_completed: false
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /leagues/{league_id}/team-stats:
+    get:
+      tags:
+        - League Data
+      summary: Get league team statistics
+      description: |
+        Team-level statistics for a league season: goals, xG, shots, clean sheets, etc.
+
+        **Cache TTL:** 12 hours
+      operationId: getLeagueTeamStats
+      x-cache-ttl: 43200
+      parameters:
+        - name: league_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 36
+        - name: season
+          in: query
+          required: true
+          schema:
+            type: string
+            example: "2024-2025"
+        - name: type
+          in: query
+          required: false
+          description: Stats scope — total, home matches only, or away matches only
+          schema:
+            type: string
+            enum: [total, home, guest]
+            default: total
+      responses:
+        '200':
+          description: Team statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamStatsResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /leagues/{league_id}/player-stats:
+    get:
+      tags:
+        - League Data
+      summary: Get league player statistics
+      description: |
+        Player statistics for a league season: top scorers, assist leaders, defensive stats, etc.
+
+        **Cache TTL:** 24 hours
+
+        **Categories:**
+        - `offensive`: Goals, shots, conversion rate
+        - `passing`: Assists, key passes, pass accuracy
+        - `defensive`: Tackles, interceptions, clearances
+        - `summary`: Combined overview
+      operationId: getLeaguePlayerStats
+      x-cache-ttl: 86400
+      parameters:
+        - name: league_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 36
+        - name: season
+          in: query
+          required: true
+          schema:
+            type: string
+            example: "2024-2025"
+        - name: category
+          in: query
+          required: false
+          description: Stats category
+          schema:
+            type: string
+            enum: [offensive, passing, defensive, summary]
+            default: offensive
+      responses:
+        '200':
+          description: Player statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlayerStatsResponse'
+              example:
+                success: true
+                data:
+                  league_id: 36
+                  season: "2024-2025"
+                  category: "offensive"
+                  player_count: 20
+                  players:
+                    - name: "Icardi"
+                      team: "Galatasaray"
+                      goals: 18
+                      shots: 65
+                      shots_on_target: 32
+                      conversion_rate: 0.277
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /leagues/{league_id}/handicap-stats:
+    get:
+      tags:
+        - League Data
+      summary: Get league handicap statistics
+      description: |
+        Asian handicap and over/under statistics aggregated at league level.
+        Useful for identifying betting trends in a league.
+
+        **Cache TTL:** 12 hours
+      operationId: getLeagueHandicapStats
+      x-cache-ttl: 43200
+      parameters:
+        - name: league_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 36
+        - name: season
+          in: query
+          required: true
+          schema:
+            type: string
+            example: "2024-2025"
+      responses:
+        '200':
+          description: Handicap statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandicapStatsResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  # ============================================================================
+  # HEALTH & ADMIN ENDPOINTS
+  # ============================================================================
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Basic health check
+      description: Lightweight liveness probe. No auth required. Used by load balancers.
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: healthy
+                timestamp: "2026-02-19T10:00:00Z"
+                version: "1.0.0"
+
+  /health/detailed:
+    get:
+      tags:
+        - Health
+      summary: Detailed health check
+      description: |
+        Returns detailed service status including cache health and background tasks.
+        No auth required.
+      operationId: detailedHealthCheck
+      responses:
+        '200':
+          description: Detailed health status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailedHealthResponse'
+              example:
+                status: healthy
+                timestamp: "2026-02-19T10:00:00Z"
+                version: "1.0.0"
+                cache: "enabled"
+                cache_info:
+                  type: "redis"
+                  timeout: 1800
+                session: "managed by http_client"
+                background_tasks:
+                  cache_cleanup:
+                    last_run: "2026-02-19T09:00:00Z"
+                    next_run: "2026-02-19T10:00:00Z"
+                  is_leader: true
+
+  /cache/status:
+    get:
+      tags:
+        - Health
+      summary: Cache configuration status
+      description: Returns current cache configuration (type, Redis host/port, default TTL).
+      operationId: getCacheStatus
+      responses:
+        '200':
+          description: Cache configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CacheStatusResponse'
+
+  /cache/stats:
+    get:
+      tags:
+        - Health
+      summary: Cache performance statistics
+      description: |
+        Returns cache performance metrics:
+        - `hits` / `misses`: Raw counts
+        - `hit_rate`: Percentage served from cache
+        - `stale_served`: Times stale data was served (before background refresh)
+        - `background_refreshes`: Async refresh operations started
+        - `refresh_failures`: Failed background refreshes
+        - `dedup_hits`: Duplicate requests collapsed (prevented N upstream calls)
+        - `active_background_refreshes`: Currently running background refreshes
+      operationId: getCacheStats
+      responses:
+        '200':
+          description: Cache performance metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CacheStatsResponse'
+              example:
+                success: true
+                data:
+                  hits: 15420
+                  misses: 890
+                  hit_rate: 94.5
+                  stale_served: 230
+                  background_refreshes: 445
+                  refresh_failures: 3
+                  dedup_hits: 67
+                  active_background_refreshes: 2
+                  timestamp: "2026-02-19T10:00:00Z"
+
+  /cache/clear:
+    post:
+      tags:
+        - Health
+      summary: Clear all cache
+      description: |
+        Clears all cached data. Forces fresh data fetch on next requests.
+
+        **Warning:** This will cause a temporary increase in response times and upstream load.
+
+        **Recommended auth:** API Key or JWT (currently unenforced — planned fix).
+      operationId: clearCache
+      security:
+        - apiKeyAuth: []
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Cache cleared successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+              example:
+                success: true
+                data:
+                  message: "Cache başarıyla temizlendi"
+                  timestamp: "2026-02-19T10:00:00Z"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /cache/stats/reset:
+    post:
+      tags:
+        - Health
+      summary: Reset cache statistics counters
+      description: Resets all cache statistics counters to zero. Useful for monitoring baseline measurements.
+      operationId: resetCacheStats
+      security:
+        - apiKeyAuth: []
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Stats reset successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /sources/health:
+    get:
+      tags:
+        - Health
+      summary: Data source health metrics
+      description: |
+        Health metrics for all configured data sources:
+        - Request count, success/failure counts
+        - Error rate and consecutive failures
+        - Last error type and timestamp
+        - Priority score (higher = preferred)
+        - Whether this source is currently primary
+
+        Useful for monitoring the multi-source failover system.
+      operationId: getSourcesHealth
+      responses:
+        '200':
+          description: Source health metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourcesHealthResponse'
+              example:
+                success: true
+                data:
+                  summary:
+                    total_requests: 58420
+                    total_failures: 145
+                    overall_error_rate: 0.0025
+                    primary_source: "https://live3.nowgoal26.com"
+                    total_sources: 3
+                  timestamp: "2026-02-19T10:00:00Z"
+                  sources:
+                    "https://live3.nowgoal26.com":
+                      is_primary: true
+                      total_requests: 48200
+                      successful_requests: 48090
+                      failed_requests: 110
+                      error_rate: 0.0023
+                      consecutive_failures: 0
+                      priority_score: 0.98
+                      last_error: null
+
+  /sources/force-primary:
+    post:
+      tags:
+        - Health
+      summary: Force primary data source
+      description: |
+        Manually override the primary data source selection.
+        Useful for testing or emergency failover.
+
+        **Requires auth.**
+      operationId: forcePrimarySource
+      security:
+        - apiKeyAuth: []
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - source_url
+              properties:
+                source_url:
+                  type: string
+                  format: uri
+                  description: Full URL of the source to force as primary
+                  example: "https://www.goaloo.com"
+            example:
+              source_url: "https://www.goaloo.com"
+      responses:
+        '200':
+          description: Primary source changed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '400':
+          description: Missing or invalid source_url
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /sources/reset-metrics:
+    post:
+      tags:
+        - Health
+      summary: Reset source health metrics
+      description: |
+        Resets health metrics for one or all data sources.
+        When `source_url` is omitted, resets ALL sources.
+
+        **Requires auth.**
+      operationId: resetSourceMetrics
+      security:
+        - apiKeyAuth: []
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                source_url:
+                  type: string
+                  format: uri
+                  description: Specific source to reset. Omit to reset all sources.
+                  example: "https://www.nowgoal.com"
+            example:
+              source_url: "https://www.nowgoal.com"
+      responses:
+        '200':
+          description: Metrics reset
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ============================================================================
+  # AUTHENTICATION
+  # ============================================================================
+  /auth/token:
+    post:
+      tags:
+        - Authentication
+      summary: Generate JWT token
+      description: |
+        Exchange an API key for a short-lived JWT Bearer token (1 hour).
+
+        The token can then be used in the `Authorization: Bearer <token>` header.
+
+        API keys are configured via the `API_SECRET_KEY` environment variable.
+      operationId: generateToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - api_key
+              properties:
+                api_key:
+                  type: string
+                  description: Your API secret key
+                  example: "your-api-secret-key"
+            example:
+              api_key: "your-api-secret-key"
+      responses:
+        '200':
+          description: JWT token generated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+              example:
+                access_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                token_type: "Bearer"
+                expires_in: 3600
+        '400':
+          description: API key missing from request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "API key is required"
+                status_code: 400
+                success: false
+        '403':
+          description: Invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Invalid API key"
+                status_code: 403
+                success: false
+
+  # ============================================================================
+  # DEPRECATED ENDPOINTS (kept for reference)
+  # ============================================================================
+  /teams/search:
+    get:
+      tags:
+        - Matches
+      summary: Search teams
+      description: |
+        **DEPRECATED.** This endpoint has been removed from the blueprint registration.
+        Use the league standings or match endpoints to find team information.
+      operationId: searchTeams
+      deprecated: true
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Search query (minimum 1 character)
+          schema:
+            type: string
+            minLength: 1
+            example: "Arsenal"
+      responses:
+        '410':
+          description: Gone — endpoint deprecated and removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /teams/{team_name}/matches:
+    get:
+      tags:
+        - Matches
+      summary: Get team matches
+      description: |
+        **DEPRECATED.** This endpoint has been removed from the blueprint registration.
+        Use `/leagues/{league_id}/matches` instead.
+      operationId: getTeamMatches
+      deprecated: true
+      parameters:
+        - name: team_name
+          in: path
+          required: true
+          schema:
+            type: string
+            example: "Arsenal"
+      responses:
+        '410':
+          description: Gone — endpoint deprecated and removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  # ============================================================================
+  # HEADERS
+  # ============================================================================
+  headers:
+    X-RateLimit-Limit:
+      description: Maximum number of requests allowed per minute
+      schema:
+        type: integer
+        example: 200
+    X-RateLimit-Remaining:
+      description: Number of requests remaining in current rate limit window
+      schema:
+        type: integer
+        example: 195
+    X-RateLimit-Reset:
+      description: Unix timestamp (UTC) when the rate limit window resets
+      schema:
+        type: integer
+        example: 1708340460
+    Retry-After:
+      description: Number of seconds to wait before retrying (for 429 and 503 responses)
+      schema:
+        type: integer
+        example: 60
+    X-Cache-TTL:
+      description: Cache time-to-live in seconds for this response
+      schema:
+        type: integer
+        example: 300
+
+  # ============================================================================
+  # SCHEMAS
+  # ============================================================================
+  schemas:
+    # Base Response
+    SuccessResponse:
+      type: object
+      required:
+        - success
+        - timestamp
+      properties:
+        success:
+          type: boolean
+          example: true
+        timestamp:
+          type: string
+          format: date-time
+          example: "2026-02-19T10:00:00Z"
+        data:
+          type: object
+
+    ErrorResponse:
+      type: object
+      required:
+        - success
+        - error
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string
+          example: "Resource not found"
+        status_code:
+          type: integer
+          example: 404
+        timestamp:
+          type: string
+          format: date-time
+          example: "2026-02-19T10:00:00Z"
+
+    MessageResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                message:
+                  type: string
+                  example: "Operation completed successfully"
+                timestamp:
+                  type: string
+                  format: date-time
+
+    # ---- Match Models ----
+    Match:
+      type: object
+      properties:
+        match_id:
+          type: integer
+          example: 2804405
+        home_team:
+          type: string
+          example: "Arsenal"
+        away_team:
+          type: string
+          example: "Chelsea"
+        home_team_id:
+          type: integer
+          example: 1234
+        away_team_id:
+          type: integer
+          example: 5678
+        home_score:
+          type: integer
+          nullable: true
+          example: 2
+          description: null when match is scheduled
+        away_score:
+          type: integer
+          nullable: true
+          example: 1
+          description: null when match is scheduled
+        match_time:
+          type: string
+          format: date-time
+          example: "2026-02-19T20:00:00Z"
+        status:
+          type: string
+          enum: [scheduled, 1H, HT, 2H, ET, PEN, finished, postponed, cancelled, abandoned]
+          example: "finished"
+          description: |
+            Match status codes:
+            - `scheduled`: Not yet started
+            - `1H`: First half in progress
+            - `HT`: Half time
+            - `2H`: Second half in progress
+            - `ET`: Extra time
+            - `PEN`: Penalty shootout
+            - `finished`: Match ended
+            - `postponed`: Match postponed
+            - `cancelled`: Match cancelled
+            - `abandoned`: Match abandoned
+        league_id:
+          type: integer
+          example: 1
+        league_name:
+          type: string
+          example: "England Premier League"
+
+    MatchDetailsResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              allOf:
+                - $ref: '#/components/schemas/Match'
+                - type: object
+                  properties:
+                    analysis:
+                      type: object
+                      description: Pre-computed analysis results (H2H summary, form, predictions)
+                      properties:
+                        h2h_summary:
+                          type: object
+                        home_form:
+                          type: string
+                          example: "WWDLW"
+                        away_form:
+                          type: string
+                          example: "WDLWL"
+                        prediction:
+                          type: object
+
+    DateMatchesResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                date:
+                  type: string
+                  format: date
+                  example: "2026-02-19"
+                total_matches:
+                  type: integer
+                  example: 42
+                matches:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/Match'
+                leagues:
+                  type: object
+                  description: Map of league_id → league info with match count
+                  additionalProperties:
+                    type: object
+                    properties:
+                      league_name:
+                        type: string
+                      league_code:
+                        type: string
+                      match_count:
+                        type: integer
+
+    H2HResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                match_id:
+                  type: integer
+                  example: 2804405
+                h2h_details:
+                  type: object
+                  description: Raw H2H data from data source
+                  properties:
+                    head_to_head:
+                      type: array
+                      items:
+                        $ref: '#/components/schemas/Match'
+                    home_last_matches:
+                      type: array
+                      items:
+                        $ref: '#/components/schemas/Match'
+                    away_last_matches:
+                      type: array
+                      items:
+                        $ref: '#/components/schemas/Match'
+                    standings:
+                      type: object
+                    injuries:
+                      type: array
+                      items:
+                        type: object
+
+    OddsResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                match_id:
+                  type: integer
+                  example: 2804405
+                odds_data:
+                  type: object
+                  properties:
+                    corner_odds:
+                      type: object
+                      description: Corner betting markets
+                    correct_score_odds:
+                      type: object
+                      description: Exact score prediction odds
+                    double_chance_odds:
+                      type: object
+                      description: 1X, 12, X2 markets
+                    first_half_odds:
+                      type: object
+                      description: Half-time result markets
+                    odds_comp:
+                      type: object
+                      description: Full odds comparison from multiple bookmakers
+
+    # ---- Live Match Models ----
+    LiveMatch:
+      allOf:
+        - $ref: '#/components/schemas/Match'
+        - type: object
+          properties:
+            minute:
+              type: integer
+              description: Current match minute (0 when not started)
+              example: 67
+            is_live:
+              type: boolean
+              description: true if match is currently in play
+              example: true
+            stats:
+              $ref: '#/components/schemas/LiveStats'
+            odds:
+              $ref: '#/components/schemas/LiveOdds'
+
+    LiveStats:
+      type: object
+      description: Real-time technical statistics
+      properties:
+        possession:
+          type: object
+          properties:
+            home:
+              type: integer
+              example: 55
+              description: Percentage (0-100)
+            away:
+              type: integer
+              example: 45
+        shots:
+          type: object
+          properties:
+            home:
+              type: integer
+              example: 8
+            away:
+              type: integer
+              example: 5
+        shots_on_target:
+          type: object
+          properties:
+            home:
+              type: integer
+              example: 3
+            away:
+              type: integer
+              example: 2
+        corners:
+          type: object
+          properties:
+            home:
+              type: integer
+              example: 4
+            away:
+              type: integer
+              example: 2
+        fouls:
+          type: object
+          properties:
+            home:
+              type: integer
+              example: 7
+            away:
+              type: integer
+              example: 9
+        yellow_cards:
+          type: object
+          properties:
+            home:
+              type: integer
+              example: 1
+            away:
+              type: integer
+              example: 2
+        red_cards:
+          type: object
+          properties:
+            home:
+              type: integer
+              example: 0
+            away:
+              type: integer
+              example: 0
+        attacks:
+          type: object
+          properties:
+            home:
+              type: integer
+              example: 45
+            away:
+              type: integer
+              example: 38
+        dangerous_attacks:
+          type: object
+          properties:
+            home:
+              type: integer
+              example: 18
+            away:
+              type: integer
+              example: 12
+
+    LiveOdds:
+      type: object
+      description: Live Bet365 odds
+      properties:
+        asian_handicap:
+          type: object
+          properties:
+            home:
+              type: number
+              format: float
+              example: 1.85
+            line:
+              type: number
+              format: float
+              example: -0.5
+              description: Handicap line (negative = home favored)
+            away:
+              type: number
+              format: float
+              example: 2.05
+        match_result:
+          type: object
+          description: Full time 1X2
+          properties:
+            home:
+              type: number
+              format: float
+              example: 1.60
+            draw:
+              type: number
+              format: float
+              example: 3.80
+            away:
+              type: number
+              format: float
+              example: 5.50
+        over_under:
+          type: object
+          properties:
+            over:
+              type: number
+              format: float
+              example: 2.10
+            line:
+              type: number
+              format: float
+              example: 2.5
+            under:
+              type: number
+              format: float
+              example: 1.75
+        both_teams_score:
+          type: object
+          properties:
+            yes:
+              type: number
+              format: float
+              example: 1.80
+            no:
+              type: number
+              format: float
+              example: 2.00
+
+    MatchEvent:
+      type: object
+      properties:
+        minute:
+          type: integer
+          example: 23
+        type:
+          type: string
+          enum: [goal, own_goal, penalty_goal, penalty_missed, yellow_card, red_card, second_yellow, substitution, var_decision]
+          example: "goal"
+        team:
+          type: string
+          enum: [home, away]
+          example: "home"
+        player:
+          type: string
+          example: "Saka"
+        assist:
+          type: string
+          nullable: true
+          example: "Odegaard"
+        score:
+          type: string
+          description: Score after this event (goals only)
+          example: "1-0"
+
+    LiveMatchesResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                matches:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/LiveMatch'
+                leagues:
+                  type: object
+                  description: Map of league_id → league name/info
+                meta:
+                  type: object
+                  properties:
+                    total_matches:
+                      type: integer
+                      example: 15
+                    live_count:
+                      type: integer
+                      example: 12
+                      description: Matches currently in play
+                    last_update:
+                      type: string
+                      format: date-time
+                    cache_ttl:
+                      type: integer
+                      example: 30
+
+    LiveMatchDetailResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/LiveMatch'
+
+    LiveStatsResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                match_id:
+                  type: integer
+                  example: 2804405
+                cache_ttl:
+                  type: integer
+                  example: 30
+                stats:
+                  $ref: '#/components/schemas/LiveStats'
+
+    LiveOddsResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                match_id:
+                  type: integer
+                  example: 2804405
+                bookmaker:
+                  type: string
+                  example: "Bet365"
+                cache_ttl:
+                  type: integer
+                  example: 15
+                odds:
+                  $ref: '#/components/schemas/LiveOdds'
+
+    LiveCornersResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                match_id:
+                  type: integer
+                  example: 2804405
+                cache_ttl:
+                  type: integer
+                  example: 30
+                corners:
+                  type: object
+                  properties:
+                    total:
+                      type: object
+                      properties:
+                        home:
+                          type: integer
+                          example: 4
+                        away:
+                          type: integer
+                          example: 2
+                    first_half:
+                      type: object
+                      properties:
+                        home:
+                          type: integer
+                          example: 2
+                        away:
+                          type: integer
+                          example: 1
+                    odds:
+                      type: object
+                      description: Corner betting markets
+
+    LiveEventsResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                match_id:
+                  type: integer
+                  example: 2804405
+                cache_ttl:
+                  type: integer
+                  example: 30
+                events:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/MatchEvent'
+
+    # ---- League Models ----
+    League:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: "England Premier League"
+        code:
+          type: string
+          example: "premier-league"
+        country:
+          type: string
+          example: "england"
+        type:
+          type: string
+          enum: [league, subleague, cup]
+          example: "league"
+
+    Standing:
+      type: object
+      properties:
+        position:
+          type: integer
+          example: 1
+        team_id:
+          type: integer
+          example: 1234
+        team_name:
+          type: string
+          example: "Arsenal"
+        played:
+          type: integer
+          example: 22
+        won:
+          type: integer
+          example: 16
+        drawn:
+          type: integer
+          example: 4
+        lost:
+          type: integer
+          example: 2
+        goals_for:
+          type: integer
+          example: 52
+        goals_against:
+          type: integer
+          example: 18
+        goal_difference:
+          type: integer
+          example: 34
+        points:
+          type: integer
+          example: 52
+        form:
+          type: string
+          description: Last 5 results (W/D/L)
+          example: "WWDWW"
+
+    LeaguesListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                leagues:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        example: "36"
+                      name:
+                        type: string
+                        example: "Turkey Super Lig"
+                      code:
+                        type: string
+                        example: "super-lig"
+                count:
+                  type: integer
+                  example: 12
+
+    AllLeaguesResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                metadata:
+                  type: object
+                  properties:
+                    total_leagues:
+                      type: integer
+                      example: 450
+                    version:
+                      type: string
+                top_leagues:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/League'
+                cups:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/League'
+                leagues:
+                  type: object
+                  description: Map of country_code → array of leagues
+                  additionalProperties:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/League'
+
+    TopLeaguesResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                top_leagues:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/League'
+                major_cups:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/League'
+                count:
+                  type: integer
+                  example: 10
+
+    CountriesResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                countries:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      code:
+                        type: string
+                        example: "england"
+                      name:
+                        type: string
+                        example: "England"
+                      league_count:
+                        type: integer
+                        example: 8
+                count:
+                  type: integer
+                  example: 85
+
+    LeagueLookupResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                league:
+                  $ref: '#/components/schemas/League'
+                found_in:
+                  type: string
+                  description: Where the league was found in the database
+                  example: "leagues.turkey"
+                  enum:
+                    - "top_leagues"
+                    - "cups"
+                    - "sub_league_mappings"
+
+    LeagueInfoResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                league_id:
+                  type: integer
+                  example: 36
+                code:
+                  type: string
+                  example: "super-lig"
+                name:
+                  type: string
+                  example: "Turkey Super Lig"
+                type:
+                  type: string
+                  enum: [league, subleague, cup]
+                country:
+                  type: string
+                  example: "turkey"
+                has_subleague:
+                  type: boolean
+                  example: false
+                available_seasons:
+                  type: array
+                  items:
+                    type: string
+                  example: ["2024-2025", "2023-2024", "2022-2023"]
+                current_season:
+                  type: string
+                  example: "2024-2025"
+                is_cup:
+                  type: boolean
+                  example: false
+
+    StandingsResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                league:
+                  type: object
+                  properties:
+                    id:
+                      type: integer
+                    name:
+                      type: string
+                    season:
+                      type: string
+                sub_league:
+                  type: object
+                  nullable: true
+                standings_type:
+                  type: string
+                  enum: [overall, home, away]
+                standings:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/Standing'
+                teams_count:
+                  type: integer
+                  example: 20
+                zones:
+                  type: object
+                  description: Team position ranges for promotion/relegation/European spots
+                  properties:
+                    champions_league:
+                      type: array
+                      items:
+                        type: integer
+                    europa_league:
+                      type: array
+                      items:
+                        type: integer
+                    relegation:
+                      type: array
+                      items:
+                        type: integer
+
+    LeagueMatchesResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                league:
+                  type: object
+                season:
+                  type: string
+                  example: "2024-2025"
+                round:
+                  type: integer
+                  nullable: true
+                  example: 22
+                total_rounds:
+                  type: integer
+                  example: 38
+                matches:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/Match'
+                match_count:
+                  type: integer
+                  example: 10
+
+    LeagueFullResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                league:
+                  type: object
+                teams:
+                  type: object
+                  description: Map of team_id → team info
+                standings:
+                  type: object
+                  properties:
+                    overall:
+                      type: array
+                      items:
+                        $ref: '#/components/schemas/Standing'
+                    home:
+                      type: array
+                      items:
+                        $ref: '#/components/schemas/Standing'
+                    away:
+                      type: array
+                      items:
+                        $ref: '#/components/schemas/Standing'
+                rounds:
+                  type: object
+                  description: Map of round_number → array of matches
+                zones:
+                  type: object
+                total_matches:
+                  type: integer
+                  example: 220
+
+    CurrentRoundResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                league_id:
+                  type: integer
+                  example: 36
+                season:
+                  type: string
+                  example: "2024-2025"
+                current_round:
+                  type: integer
+                  example: 22
+                next_round:
+                  type: integer
+                  nullable: true
+                  example: 23
+                last_completed_round:
+                  type: integer
+                  example: 21
+                total_rounds:
+                  type: integer
+                  example: 38
+                season_completed:
+                  type: boolean
+                  example: false
+
+    TeamStatsResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                league_id:
+                  type: integer
+                  example: 36
+                season:
+                  type: string
+                  example: "2024-2025"
+                stats_type:
+                  type: string
+                  enum: [total, home, guest]
+                  example: "total"
+                teams:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      team_id:
+                        type: integer
+                      team_name:
+                        type: string
+                      goals_scored:
+                        type: integer
+                      goals_conceded:
+                        type: integer
+                      clean_sheets:
+                        type: integer
+                      shots:
+                        type: integer
+                      shots_on_target:
+                        type: integer
+                team_count:
+                  type: integer
+                  example: 19
+
+    PlayerStatsResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                league_id:
+                  type: integer
+                  example: 36
+                season:
+                  type: string
+                  example: "2024-2025"
+                category:
+                  type: string
+                  enum: [offensive, passing, defensive, summary]
+                players:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                        example: "Icardi"
+                      team:
+                        type: string
+                        example: "Galatasaray"
+                      goals:
+                        type: integer
+                        example: 18
+                      assists:
+                        type: integer
+                        example: 5
+                player_count:
+                  type: integer
+                  example: 20
+
+    HandicapStatsResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                league_id:
+                  type: integer
+                  example: 36
+                season:
+                  type: string
+                  example: "2024-2025"
+                summary:
+                  type: object
+                  description: Aggregated handicap and over/under statistics
+                  properties:
+                    avg_goals_per_match:
+                      type: number
+                      format: float
+                      example: 2.6
+                    over_2_5_rate:
+                      type: number
+                      format: float
+                      example: 0.58
+                    btts_rate:
+                      type: number
+                      format: float
+                      example: 0.52
+                    home_win_rate:
+                      type: number
+                      format: float
+                      example: 0.48
+
+    # ---- Health Models ----
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - timestamp
+        - version
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+          example: "healthy"
+        timestamp:
+          type: string
+          format: date-time
+          example: "2026-02-19T10:00:00Z"
+        version:
+          type: string
+          example: "1.0.0"
+
+    DetailedHealthResponse:
+      allOf:
+        - $ref: '#/components/schemas/HealthResponse'
+        - type: object
+          properties:
+            cache:
+              type: string
+              enum: [enabled, disabled]
+              example: "enabled"
+            cache_info:
+              type: object
+              properties:
+                type:
+                  type: string
+                  example: "redis"
+                timeout:
+                  type: integer
+                  example: 1800
+            session:
+              type: string
+              example: "managed by http_client"
+            background_tasks:
+              type: object
+              properties:
+                is_leader:
+                  type: boolean
+                  example: true
+                cache_cleanup:
+                  type: object
+
+    CacheStatusResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                cache_type:
+                  type: string
+                  example: "redis"
+                redis_host:
+                  type: string
+                  example: "localhost"
+                redis_port:
+                  type: integer
+                  example: 6379
+                default_timeout:
+                  type: integer
+                  example: 1800
+                status:
+                  type: string
+                  enum: [active, fallback, disabled]
+                  example: "active"
+
+    CacheStatsResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                hits:
+                  type: integer
+                  description: Requests served from cache
+                  example: 15420
+                misses:
+                  type: integer
+                  description: Requests that required upstream fetch
+                  example: 890
+                hit_rate:
+                  type: number
+                  format: float
+                  description: Cache hit percentage (0-100)
+                  example: 94.5
+                stale_served:
+                  type: integer
+                  description: Stale cache entries served while background refresh ran
+                  example: 230
+                background_refreshes:
+                  type: integer
+                  description: Async cache refresh operations started
+                  example: 445
+                refresh_failures:
+                  type: integer
+                  description: Failed background refresh operations
+                  example: 3
+                dedup_hits:
+                  type: integer
+                  description: Duplicate concurrent requests collapsed (saved upstream calls)
+                  example: 67
+                active_background_refreshes:
+                  type: integer
+                  description: Currently running background refreshes
+                  example: 2
+                timestamp:
+                  type: string
+                  format: date-time
+
+    SourcesHealthResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                sources:
+                  type: object
+                  description: Map of source_url → health metrics
+                  additionalProperties:
+                    type: object
+                    properties:
+                      is_primary:
+                        type: boolean
+                      total_requests:
+                        type: integer
+                      successful_requests:
+                        type: integer
+                      failed_requests:
+                        type: integer
+                      error_rate:
+                        type: number
+                        format: float
+                      consecutive_failures:
+                        type: integer
+                      priority_score:
+                        type: number
+                        format: float
+                      last_error:
+                        type: string
+                        nullable: true
+                      last_error_time:
+                        type: string
+                        format: date-time
+                        nullable: true
+                summary:
+                  type: object
+                  properties:
+                    total_requests:
+                      type: integer
+                      example: 58420
+                    total_failures:
+                      type: integer
+                      example: 145
+                    overall_error_rate:
+                      type: number
+                      format: float
+                      example: 0.0025
+                    primary_source:
+                      type: string
+                      example: "https://live3.nowgoal26.com"
+                    total_sources:
+                      type: integer
+                      example: 3
+                timestamp:
+                  type: string
+                  format: date-time
+
+    # ---- Authentication ----
+    TokenResponse:
+      type: object
+      required:
+        - access_token
+        - token_type
+        - expires_in
+      properties:
+        access_token:
+          type: string
+          description: JWT Bearer token
+          example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhcGlfdXNlciIsImV4cCI6MTcwODM0NDQ2MH0.abc123"
+        token_type:
+          type: string
+          example: "Bearer"
+        expires_in:
+          type: integer
+          description: Token expiry in seconds
+          example: 3600
+
+  # ============================================================================
+  # RESPONSES (Reusable)
+  # ============================================================================
+  responses:
+    BadRequest:
+      description: Bad Request — missing or invalid parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error: "Missing required parameter: season"
+            status_code: 400
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error: "Match 9999999 not found"
+            status_code: 404
+
+    Unauthorized:
+      description: Unauthorized — valid authentication required
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+          description: Authentication scheme
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error: "Authentication required"
+            status_code: 401
+
+    TooManyRequests:
+      description: Rate limit exceeded
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/Retry-After'
+        X-RateLimit-Limit:
+          $ref: '#/components/headers/X-RateLimit-Limit'
+        X-RateLimit-Reset:
+          $ref: '#/components/headers/X-RateLimit-Reset'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error: "Rate limit exceeded. Try again in 60 seconds."
+            status_code: 429
+
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error: "An unexpected error occurred"
+            status_code: 500
+
+    ServiceUnavailable:
+      description: Service temporarily unavailable (all data sources failed)
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/Retry-After'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error: "Service temporarily unavailable. Please retry in 60 seconds."
+            status_code: 503
+
+  # ============================================================================
+  # SECURITY SCHEMES
+  # ============================================================================
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT token obtained from `POST /auth/token`.
+        Include as: `Authorization: Bearer <token>`
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: |
+        API key for direct authentication.
+        Include as: `X-API-Key: <your-key>`

@@ -1,0 +1,13 @@
+[Unit]
+Description=AWA Predator V2 API
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/opt/predator-api
+Environment="PATH=/opt/predator-api/venv/bin"
+ExecStart=/opt/predator-api/venv/bin/gunicorn --workers 3 --bind 0.0.0.0:8001 app:app
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
