@@ -193,12 +193,8 @@ def get_real_ip():
 # --- Rate Limit Whitelist ---
 
 WHITELIST_IPS = [
-    # API sunucusunun kendi IP'si (localhost istekleri için)
-    # '127.0.0.1',
-    # '::1',
-
-    # Eğer başka güvenilir sunucularınız varsa buraya ekleyin
-    # 'trusted-server-ip',
+    '127.0.0.1',
+    '::1',
 ]
 
 WHITELIST_DOMAINS = [
