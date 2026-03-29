@@ -1,0 +1,38 @@
+networks:
+  coolify:
+    external: true
+  internal:
+    internal: true
+
+services:
+  eagle-api:
+    build: .
+    container_name: eagle-api
+    networks:
+      - coolify
+      - internal
+    environment:
+      FLASK_ENV: production
+      API_SECRET_KEY: ${API_SECRET_KEY}
+      SECRET_KEY: ${SECRET_KEY}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-eagle-jwt-secret}
+      EAGLE_CRON_INTERVAL: ${EAGLE_CRON_INTERVAL:-600}
+      # Accuracy tracker - awa-postgres connection
+      DATABASE_URL: postgresql://${POSTGRES_USER:-awauser}:${POSTGRES_PASSWORD}@awa-postgres:5432/${POSTGRES_DB:-awadb}
+      # Cache (optional - Dragonfly)
+      REDIS_URL: redis://awa-dragonfly:6379
+    ports:
+      - "8098:8098"
+    volumes:
+      - eagle_data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8098/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  eagle_data:
+    name: eagle_data
