@@ -30,6 +30,15 @@ def calculate_final_predictions(analysis_data):
         streaks = analysis_data.get('streak_predictions', {})
         streak_signals = streaks.get('signals', {}) if streaks else {}
 
+        # 6 YENİ algoritmalar
+        card_preds = analysis_data.get('card_predictions', {})
+        cs_enhanced = analysis_data.get('correct_score_enhanced', {})
+        handicap_preds = analysis_data.get('handicap_predictions', {})
+        first_half_preds = analysis_data.get('first_half_predictions', {})
+        second_half_preds = analysis_data.get('second_half_predictions', {})
+        half_btts_preds = analysis_data.get('half_btts_predictions', {})
+        corner_preds = analysis_data.get('corner_predictions', {})
+
         final_predictions = {}
 
         # 1X2 - 4 → 7 kaynak (+ poisson, odds_movement, streaks)
@@ -58,12 +67,94 @@ def calculate_final_predictions(analysis_data):
         # Team Scoring - 2 kaynak (değişmedi)
         final_predictions['team_scoring'] = calculate_team_scoring_final(h2h, team_perf)
 
-        # YENİ: Kaynak sayısını metadata olarak ekle
+        # ===== YENİ TAHMİN KATEGORİLERİ (6 yeni algoritma) =====
+
+        # Card predictions (kart tahminleri)
+        if card_preds:
+            final_predictions['card'] = card_preds
+
+        # Enhanced correct score (Dixon-Coles model)
+        if cs_enhanced:
+            final_predictions['correct_score_enhanced'] = cs_enhanced
+            # Also update 1x2 with Dixon-Coles derived predictions if available
+            cs_derived = cs_enhanced.get('derived_predictions', {})
+            if cs_derived.get('1x2') and final_predictions.get('1x2'):
+                # Blend Dixon-Coles 1x2 into existing (5% weight - supplementary)
+                dc_1x2 = cs_derived['1x2']
+                existing_1x2 = final_predictions['1x2']
+                for key in ['home', 'draw', 'away']:
+                    if key in dc_1x2 and key in existing_1x2:
+                        existing_1x2[key] = round(
+                            existing_1x2[key] * 0.95 + dc_1x2[key] * 0.05, 1
+                        )
+
+        # Handicap predictions
+        if handicap_preds:
+            final_predictions['handicap'] = handicap_preds
+
+        # First half detailed predictions
+        if first_half_preds:
+            final_predictions['first_half'] = first_half_preds
+            # Update HT predictions with first_half data
+            fh_1x2 = first_half_preds.get('ht_1x2', {})
+            fh_ou = first_half_preds.get('ht_over_under', {})
+            if fh_1x2 and final_predictions.get('ht_1x2'):
+                # Blend first_half Poisson model into HT 1x2 (15% weight)
+                for key in ['home', 'draw', 'away']:
+                    if key in fh_1x2 and key in final_predictions['ht_1x2']:
+                        final_predictions['ht_1x2'][key] = round(
+                            final_predictions['ht_1x2'][key] * 0.85 + fh_1x2[key] * 0.15, 1
+                        )
+            if fh_ou and final_predictions.get('ht_goals'):
+                for key in ['over_0_5', 'under_0_5']:
+                    if key in fh_ou and key in final_predictions['ht_goals']:
+                        final_predictions['ht_goals'][key] = round(
+                            final_predictions['ht_goals'][key] * 0.85 + fh_ou[key] * 0.15, 1
+                        )
+
+        # Second half predictions
+        if second_half_preds:
+            final_predictions['second_half'] = second_half_preds
+
+        # Half-based BTTS
+        if half_btts_preds:
+            final_predictions['half_btts'] = half_btts_preds
+
+        # Corner predictions
+        if corner_preds:
+            final_predictions['corner_analysis'] = corner_preds
+            # Update HT BTTS with half_btts data
+            fh_btts = half_btts_preds.get('first_half_btts', {})
+            if fh_btts and final_predictions.get('ht_btts'):
+                for key in ['yes', 'no']:
+                    if key in fh_btts and key in final_predictions['ht_btts']:
+                        final_predictions['ht_btts'][key] = round(
+                            final_predictions['ht_btts'][key] * 0.70 + fh_btts[key] * 0.30, 1
+                        )
+
+        # Kaynak durumlarını metadata olarak ekle (7 kaynak)
         final_predictions['_eagle_sources'] = {
             'poisson': bool(poisson),
             'odds_movement': bool(odds_movement),
             'streaks': bool(streaks),
-            'total_sources': 4 + sum(1 for x in [poisson, odds_movement, streaks] if x),
+            'h2h': bool(h2h),
+            'form': bool(team_perf),
+            'league_stats': bool(h2h),  # H2H data includes league context
+            'market_consensus': bool(odds),
+            'card_predictions': bool(card_preds),
+            'correct_score_enhanced': bool(cs_enhanced),
+            'handicap_predictions': bool(handicap_preds),
+            'first_half_predictions': bool(first_half_preds),
+            'second_half_predictions': bool(second_half_preds),
+            'half_btts_predictions': bool(half_btts_preds),
+            'corner_predictions': bool(corner_preds),
+            'total_sources': sum(1 for x in [
+                poisson, odds_movement, streaks, h2h, team_perf,
+                h2h,  # league_stats proxy
+                odds,  # market_consensus
+                card_preds, cs_enhanced, handicap_preds,
+                first_half_preds, second_half_preds, half_btts_preds, corner_preds,
+            ] if x),
         }
 
         return {

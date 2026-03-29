@@ -368,6 +368,14 @@ def _add_analysis_to_match_data(data):
     from analysis.poisson_model import analyze_poisson
     from analysis.odds_movement import analyze_odds_movement_predictions
     from analysis.streak_detector import detect_streaks
+    from analysis.falcon_predictions import analyze_falcon_predictions
+    from analysis.card_predictions import analyze_card_predictions
+    from analysis.correct_score_enhanced import analyze_correct_score_enhanced
+    from analysis.handicap_predictions import analyze_handicap_predictions
+    from analysis.first_half_predictions import analyze_first_half_predictions
+    from analysis.second_half_predictions import analyze_second_half_predictions
+    from analysis.half_btts_predictions import analyze_half_btts_predictions
+    from analysis.corner_predictions import analyze_corner_predictions
 
     # Extract data needed for analysis
     h2h_details_backup = data.get('h2h_details')
@@ -411,15 +419,50 @@ def _add_analysis_to_match_data(data):
     if h2h_details_backup:
         parallel_tasks.append(('streaks', detect_streaks, data))
 
+    # FALCON: Ported Falcon prediction algorithms (odds movement rules)
+    if odds_comp or fh_odds:
+        parallel_tasks.append(("falcon_preds", analyze_falcon_predictions, data))
+
     if h2h_details_backup or odds_comp:
         parallel_tasks.append(('spotlight', compute_spotlight_stats, data))
+
+    # NEW EAGLE ALGORITHMS (6 new prediction modules)
+
+    # Card prediction (needs h2h + odds for competitiveness)
+    if h2h_details_backup or odds_comp:
+        parallel_tasks.append(('card_preds', analyze_card_predictions, data))
+
+    # Enhanced correct score (Dixon-Coles + bookmaker hybrid)
+    if h2h_details_backup or correct_score_odds:
+        parallel_tasks.append(('correct_score_enhanced', analyze_correct_score_enhanced, data))
+
+    # Handicap prediction (needs Poisson lambdas + odds)
+    if h2h_details_backup and data.get('match_info'):
+        parallel_tasks.append(('handicap_preds', analyze_handicap_predictions, data))
+
+    # First half predictions (needs HT data)
+    if h2h_details_backup:
+        parallel_tasks.append(('first_half_preds', analyze_first_half_predictions, data))
+
+    # Second half predictions (needs HT + total data)
+    if h2h_details_backup:
+        parallel_tasks.append(('second_half_preds', analyze_second_half_predictions, data))
+
+    # Half-based BTTS (needs HT data)
+    if h2h_details_backup:
+        parallel_tasks.append(('half_btts_preds', analyze_half_btts_predictions, data))
+
+    # Corner predictions (needs corner_odds or odds_comp)
+    corner_odds_data = data.get('corner_odds')
+    if corner_odds_data or odds_comp:
+        parallel_tasks.append(('corner_preds', analyze_corner_predictions, data))
 
     # Run independent analyses in PARALLEL
     analysis_result = {}
 
     if parallel_tasks:
         # Use ThreadPoolExecutor for parallel execution
-        with ThreadPoolExecutor(max_workers=6, thread_name_prefix='analysis') as executor:
+        with ThreadPoolExecutor(max_workers=10, thread_name_prefix='analysis') as executor:
             # Submit all tasks
             future_to_name = {
                 executor.submit(func, arg): name
@@ -759,6 +802,8 @@ def fetch_date_matches_cached(date_str, sort_by_time=True, use_cache=True, cache
                     'match_id': match['match_id'],
                     'home_team': match['home_team'],
                     'away_team': match['away_team'],
+                    'home_team_id': match.get('home_team_id'),
+                    'away_team_id': match.get('away_team_id'),
                     'match_date': adjusted_datetime.date().isoformat() if adjusted_datetime else None,
                     'match_time': adjusted_datetime.strftime('%H:%M') if adjusted_datetime else None,
                     'league': {
