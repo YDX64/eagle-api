@@ -425,6 +425,8 @@ def _build_eagle_match_result(match_id: int, match_data: dict, bee_match: dict) 
             'away_team': bee_match.get('away_team', ''),
             'home_team_id': bee_match.get('home_team_id') or (match_data.get('match_info') or {}).get('home_team_id'),
             'away_team_id': bee_match.get('away_team_id') or (match_data.get('match_info') or {}).get('away_team_id'),
+            'home_logo': (match_data.get('match_info') or {}).get('home_team_logo_url', ''),
+            'away_logo': (match_data.get('match_info') or {}).get('away_team_logo_url', ''),
             'league': league,
             'match_time': bee_match.get('match_time', ''),
             'match_date': bee_match.get('match_date', ''),
