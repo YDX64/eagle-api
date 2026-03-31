@@ -452,16 +452,45 @@ def cleanup():
     # Stop background tasks
     try:
         stop_background_tasks()
-        logger.info("✅ Background tasks stopped")
+        logger.info("Background tasks stopped")
     except Exception as e:
-        logger.error(f"❌ Error stopping background tasks: {e}")
+        logger.error(f"Error stopping background tasks: {e}")
+
+    # Stop Eagle cron
+    try:
+        stop_eagle_cron()
+        logger.info("Eagle cron stopped")
+    except Exception as e:
+        logger.error(f"Error stopping eagle cron: {e}")
+
+    # Stop Accuracy cron
+    try:
+        stop_accuracy_cron()
+        logger.info("Accuracy cron stopped")
+    except Exception as e:
+        logger.error(f"Error stopping accuracy cron: {e}")
+
+    # Stop Tuner cron
+    try:
+        stop_tuner_cron()
+        logger.info("Tuner cron stopped")
+    except Exception as e:
+        logger.error(f"Error stopping tuner cron: {e}")
+
+    # Close accuracy DB pool
+    try:
+        from accuracy.db import close_pool
+        close_pool()
+        logger.info("Accuracy DB pool closed")
+    except Exception as e:
+        logger.error(f"Error closing accuracy DB pool: {e}")
 
     # Close HTTP session pools
     try:
         close_all_sessions()
-        logger.info("✅ HTTP session pools closed")
+        logger.info("HTTP session pools closed")
     except Exception as e:
-        logger.error(f"❌ Error closing HTTP sessions: {e}")
+        logger.error(f"Error closing HTTP sessions: {e}")
 
     logger.info("✅ Application cleanup completed")
 
@@ -531,6 +560,9 @@ def preload_cache():
 # BACKGROUND TASKS (Cache Refresh, Cleanup, Log Rotation)
 # ========================================================================
 from background_tasks import init_background_tasks, stop_background_tasks
+from eagle_cron import start_eagle_cron, stop_eagle_cron
+from accuracy.accuracy_cron import start_accuracy_cron, stop_accuracy_cron
+from accuracy.tuner_cron import start_tuner_cron, stop_tuner_cron
 
 # Initialize background tasks after cache is ready
 _background_tasks_started = False
@@ -540,8 +572,11 @@ def start_background_tasks_once():
     global _background_tasks_started
     if not _background_tasks_started:
         _background_tasks_started = True
-        logger.info("🚀 Starting background tasks (cache refresh, cleanup, logs)...")
+        logger.info("Starting background tasks (cache refresh, cleanup, logs)...")
         init_background_tasks(cache)
+        start_eagle_cron()
+        start_accuracy_cron()
+        start_tuner_cron()
 
 # Register preload function to run after first request
 # Using a flag to ensure it only runs once

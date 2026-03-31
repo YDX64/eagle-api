@@ -13,6 +13,7 @@ from routes.leagues import leagues_bp
 from routes.live import live_bp
 from routes.league_data import league_data_bp
 from routes.eagle import eagle_bp
+from routes.accuracy import accuracy_bp
 
 # Create main API blueprint
 api_bp = Blueprint('api', __name__)
@@ -26,6 +27,7 @@ api_bp.register_blueprint(leagues_bp, url_prefix='')
 api_bp.register_blueprint(live_bp, url_prefix='')
 api_bp.register_blueprint(league_data_bp, url_prefix='')
 api_bp.register_blueprint(eagle_bp, url_prefix='')
+api_bp.register_blueprint(accuracy_bp, url_prefix='')
 
 # Register test error endpoints only in development
 # DISABLED: test_error.py file is missing

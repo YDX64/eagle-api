@@ -17,8 +17,19 @@ services:
       SECRET_KEY: ${SECRET_KEY}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-eagle-jwt-secret}
       EAGLE_CRON_INTERVAL: ${EAGLE_CRON_INTERVAL:-600}
-      # Accuracy tracker - awa-postgres connection
-      DATABASE_URL: postgresql://${POSTGRES_USER:-awauser}:${POSTGRES_PASSWORD}@awa-postgres:5432/${POSTGRES_DB:-awadb}
+      # Data sources (NowGoal via NordVPN, Goaloo as fallback)
+      PRIMARY_DATA_SOURCE: https://www.nowgoal.com
+      FALLBACK_DATA_SOURCES: https://live5.nowgoal26.com,https://www.goaloo.com
+      LEAGUE_DATA_SOURCE: https://football.nowgoal26.com
+      # Accuracy tracker - awa-postgres connection (individual params to avoid URL encoding issues)
+      PGHOST: awa-postgres
+      PGPORT: "5432"
+      PGDATABASE: ${POSTGRES_DB:-awadb}
+      PGUSER: ${POSTGRES_USER:-awauser}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      # Basket1 bridge
+      BASKET1_API_URL: http://basket1-api:8091
+      BASKET1_API_KEY: ${BASKET1_API_KEY:-AIMoLK5WnFSGUWGeNGtTB2syMZmedQl9UF3mlfRQJSui7LDq7ucoIVBFd0hZMzw9}
       # Cache (optional - Dragonfly)
       REDIS_URL: redis://awa-dragonfly:6379
     ports:

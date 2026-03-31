@@ -88,6 +88,14 @@ def _picks_agree(eagle_pick: str, falcon_pick: str, market: str) -> bool:
     return e == f
 
 
+# High-odds markets — kept for coupon value (low hit rate but high payout)
+# correct_score: ~7% hit rate but 8-15x odds → profitable in coupons
+# htft: risky HT/FT combos with 3-8x odds
+SKIP_MARKETS = set()  # Nothing skipped — all markets valuable
+# Minimum confidence for HT predictions (80+ = 100%, 60+ = 45%, <45 = 22%)
+HT_MIN_CONFIDENCE = 0  # Keep all — frontend should flag confidence tiers
+
+
 def _build_eagle_match_result(match_id: int, match_data: dict, bee_match: dict) -> dict | None:
     """Build Eagle prediction result from local analysis data."""
     analysis = match_data.get('analysis', {})
@@ -196,7 +204,7 @@ def _build_eagle_match_result(match_id: int, match_data: dict, bee_match: dict) 
             'winning_direction': pick_b, 'weight_score': 1,
         }
     
-    # HT Result
+    # HT Result (filtered: only include if confidence > HT_MIN_CONFIDENCE)
     ht = fp.get('ht_1x2', {})
     if ht:
         h_home = ht.get('home', 0)
@@ -204,14 +212,15 @@ def _build_eagle_match_result(match_id: int, match_data: dict, bee_match: dict) 
         h_away = ht.get('away', 0)
         ht_map = {'IY 1': h_home, 'IY X': h_draw, 'IY 2': h_away}
         ht_best = max(ht_map.items(), key=lambda x: x[1])
-        predictions['ht_result'] = {
-            'eagle_pick': ht_best[0],
-            'eagle_confidence': min(ht_best[1] * 1.15, 99),
-            'agreement': 1, 'total_sources': 1,
-            'sources': {'eagle': {'pick': ht_best[0], 'confidence': ht_best[1]}},
-            'all_directions': {ht_best[0]: {'avg_confidence': ht_best[1], 'sources': ['eagle']}},
-            'winning_direction': ht_best[0], 'weight_score': 1,
-        }
+        if ht_best[1] >= HT_MIN_CONFIDENCE:
+            predictions['ht_result'] = {
+                'eagle_pick': ht_best[0],
+                'eagle_confidence': min(ht_best[1] * 1.15, 99),
+                'agreement': 1, 'total_sources': 1,
+                'sources': {'eagle': {'pick': ht_best[0], 'confidence': ht_best[1]}},
+                'all_directions': {ht_best[0]: {'avg_confidence': ht_best[1], 'sources': ['eagle']}},
+                'winning_direction': ht_best[0], 'weight_score': 1,
+            }
     
     # HT Over 0.5
     ht_goals = fp.get('ht_goals', {})
@@ -289,15 +298,26 @@ def _build_eagle_match_result(match_id: int, match_data: dict, bee_match: dict) 
                 },
             }
 
-    # Enhanced correct score (top 3 scores)
+    # Enhanced correct score — high-odds market, send top 3 scores for coupons
     cs_data = fp.get('correct_score_enhanced', {})
-    if cs_data:
+    if cs_data and 'correct_score' not in SKIP_MARKETS:
         top_scores = cs_data.get('top_scores', [])
         cs_conf = cs_data.get('confidence', 50)
-        if top_scores:
+        if top_scores and len(top_scores) >= 2:
+            # Skip 0-0 if it dominates and pick the most interesting score
+            # If top score is 0-0 and 2nd score is different, use 2nd
             top_score = top_scores[0]
+            if top_score.get('score') == '0:0' and len(top_scores) > 1:
+                # Use the highest non-0-0 score (more valuable for coupons)
+                for s in top_scores[1:4]:
+                    if s.get('score') != '0:0':
+                        top_score = s
+                        break
             score_str = top_score.get('score', '1:0').replace(':', '-')
             score_prob = top_score.get('probability', 0)
+            # Normalize probability if it's > 100 (bug: raw odds instead of probability)
+            if score_prob > 100:
+                score_prob = min(score_prob / 100, 99)
             predictions['correct_score'] = {
                 'eagle_pick': 'Skor ' + score_str,
                 'eagle_confidence': min(cs_conf * 0.9, 99),
@@ -394,9 +414,9 @@ def _build_eagle_match_result(match_id: int, match_data: dict, bee_match: dict) 
                 },
             }
 
-    # Risky HT/FT combination (from Falcon algorithm)
+    # Risky HT/FT combination - SKIPPED (in SKIP_MARKETS)
     falcon_risky = falcon_tahminler.get('riskli_tahmin', '')
-    if falcon_risky:
+    if falcon_risky and 'htft' not in SKIP_MARKETS:
         predictions['htft'] = {
             'eagle_pick': falcon_risky,
             'eagle_confidence': 55,

@@ -278,12 +278,22 @@ class SecurityMiddleware:
         client_ip = get_real_ip()
         
         # --- API Key Authentication (Global) ---
-        # Skip API key check for health endpoints
+        # Skip API key check for health and accuracy GET endpoints
         _exempt_paths = [
             '/health', '/api/v1/health', '/api/v1/health/detailed', '/',
             '/api/v1/auth/token',  # Token almak için key gerekmez (giriş endpoint'i)
         ]
-        if request.path not in _exempt_paths:
+        _exempt_prefixes = [
+            '/api/v1/accuracy/',  # Accuracy GET endpoints (POST /calculate has its own auth)
+            '/api/v1/reports',    # ML Monitor compat endpoints
+            '/api/v1/report/',    # ML Monitor compat: /report/{date}
+            '/api/v1/latest',     # ML Monitor compat: latest report
+        ]
+        _is_exempt = (
+            request.path in _exempt_paths
+            or any(request.path.startswith(p) for p in _exempt_prefixes)
+        )
+        if not _is_exempt:
             api_key = request.headers.get('X-API-Key')
             expected_key = current_app.config.get('API_SECRET_KEY', '')
             
