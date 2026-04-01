@@ -6,6 +6,20 @@ Combines all analysis sources with weighted averages to produce final prediction
 import logging
 import statistics
 
+# ============================================================================
+# Tunable Source Weights — AutoTuner can modify these via config_manager.
+# Each dict maps source name → base weight (normalized dynamically).
+# ============================================================================
+
+MS_WEIGHTS = {'team_perf': 0.25, 'odds': 0.25, 'h2h': 0.20, 'correct_score': 0.10, 'poisson': 0.15, 'odds_movement': 0.10, 'streaks': 0.05}
+GOAL_LINES_WEIGHTS = {'team_perf': 0.30, 'h2h': 0.20, 'correct_score': 0.15, 'poisson': 0.20, 'odds_movement': 0.15, 'streaks': 0.05}
+BTTS_WEIGHTS = {'team_perf': 0.30, 'h2h': 0.25, 'correct_score': 0.15, 'poisson': 0.20, 'streaks': 0.05}
+HT_1X2_WEIGHTS = {'team_perf': 0.40, 'h2h': 0.30, 'poisson': 0.15, 'odds_movement': 0.10}
+HT_GOALS_WEIGHTS = {'team_perf': 0.40, 'h2h': 0.30, 'poisson': 0.15, 'streaks': 0.05}
+DC_BLEND_WEIGHT = 0.05
+FH_BLEND_WEIGHT = 0.15
+HALF_BTTS_BLEND_WEIGHT = 0.30
+
 
 def calculate_final_predictions(analysis_data):
     """
@@ -79,13 +93,12 @@ def calculate_final_predictions(analysis_data):
             # Also update 1x2 with Dixon-Coles derived predictions if available
             cs_derived = cs_enhanced.get('derived_predictions', {})
             if cs_derived.get('1x2') and final_predictions.get('1x2'):
-                # Blend Dixon-Coles 1x2 into existing (5% weight - supplementary)
                 dc_1x2 = cs_derived['1x2']
                 existing_1x2 = final_predictions['1x2']
                 for key in ['home', 'draw', 'away']:
                     if key in dc_1x2 and key in existing_1x2:
                         existing_1x2[key] = round(
-                            existing_1x2[key] * 0.95 + dc_1x2[key] * 0.05, 1
+                            existing_1x2[key] * (1 - DC_BLEND_WEIGHT) + dc_1x2[key] * DC_BLEND_WEIGHT, 1
                         )
 
         # Handicap predictions
@@ -99,17 +112,16 @@ def calculate_final_predictions(analysis_data):
             fh_1x2 = first_half_preds.get('ht_1x2', {})
             fh_ou = first_half_preds.get('ht_over_under', {})
             if fh_1x2 and final_predictions.get('ht_1x2'):
-                # Blend first_half Poisson model into HT 1x2 (15% weight)
                 for key in ['home', 'draw', 'away']:
                     if key in fh_1x2 and key in final_predictions['ht_1x2']:
                         final_predictions['ht_1x2'][key] = round(
-                            final_predictions['ht_1x2'][key] * 0.85 + fh_1x2[key] * 0.15, 1
+                            final_predictions['ht_1x2'][key] * (1 - FH_BLEND_WEIGHT) + fh_1x2[key] * FH_BLEND_WEIGHT, 1
                         )
             if fh_ou and final_predictions.get('ht_goals'):
                 for key in ['over_0_5', 'under_0_5']:
                     if key in fh_ou and key in final_predictions['ht_goals']:
                         final_predictions['ht_goals'][key] = round(
-                            final_predictions['ht_goals'][key] * 0.85 + fh_ou[key] * 0.15, 1
+                            final_predictions['ht_goals'][key] * (1 - FH_BLEND_WEIGHT) + fh_ou[key] * FH_BLEND_WEIGHT, 1
                         )
 
         # Second half predictions
@@ -129,7 +141,7 @@ def calculate_final_predictions(analysis_data):
                 for key in ['yes', 'no']:
                     if key in fh_btts and key in final_predictions['ht_btts']:
                         final_predictions['ht_btts'][key] = round(
-                            final_predictions['ht_btts'][key] * 0.70 + fh_btts[key] * 0.30, 1
+                            final_predictions['ht_btts'][key] * (1 - HALF_BTTS_BLEND_WEIGHT) + fh_btts[key] * HALF_BTTS_BLEND_WEIGHT, 1
                         )
 
         # Kaynak durumlarını metadata olarak ekle (7 kaynak)
@@ -180,55 +192,54 @@ def calculate_1x2_final(correct_score, h2h, team_perf, odds,
     weights = []
     source_names = []
 
-    # Team Performance (25% → dinamik)
+    # Team Performance
     if team_perf.get('1x2'):
         sources.append(team_perf['1x2'])
-        weights.append(0.25)
+        weights.append(MS_WEIGHTS['team_perf'])
         source_names.append('team_perf')
 
-    # Odds Analysis (25% → dinamik)
+    # Odds Analysis
     if odds.get('available') and odds.get('normalized_percentages'):
         sources.append(odds['normalized_percentages'])
-        weights.append(0.25)
+        weights.append(MS_WEIGHTS['odds'])
         source_names.append('odds')
 
-    # H2H Analysis (20% → dinamik)
+    # H2H Analysis
     if h2h.get('1x2'):
         sources.append(h2h['1x2'])
-        weights.append(0.20)
+        weights.append(MS_WEIGHTS['h2h'])
         source_names.append('h2h')
 
-    # Correct Score (10% → dinamik)
+    # Correct Score
     if correct_score.get('1x2'):
         sources.append(correct_score['1x2'])
-        weights.append(0.10)
+        weights.append(MS_WEIGHTS['correct_score'])
         source_names.append('correct_score')
 
-    # EAGLE: Poisson Model (15%)
+    # Poisson Model
     if poisson and poisson.get('1x2'):
         sources.append(poisson['1x2'])
-        weights.append(0.15)
+        weights.append(MS_WEIGHTS['poisson'])
         source_names.append('poisson')
 
-    # EAGLE: Odds Movement (10%)
+    # Odds Movement
     if odds_movement and odds_movement.get('1x2'):
         sources.append(odds_movement['1x2'])
-        weights.append(0.10)
+        weights.append(MS_WEIGHTS['odds_movement'])
         source_names.append('odds_movement')
 
-    # EAGLE: Streak signals (5% bonus if strong signal)
+    # Streak signals
     if streak_signals and streak_signals.get('ms'):
         ms_sig = streak_signals['ms']
         if ms_sig.get('strength', 0) >= 0.6:
             strength = ms_sig['strength']
             direction = ms_sig['direction']
-            # Convert signal to percentages
             bonus = min(15, strength * 20)
             if direction == 'home':
                 sources.append({'home': 50 + bonus, 'draw': 25, 'away': 25 - bonus})
             elif direction == 'away':
                 sources.append({'home': 25 - bonus, 'draw': 25, 'away': 50 + bonus})
-            weights.append(0.05)
+            weights.append(MS_WEIGHTS['streaks'])
             source_names.append('streaks')
     
     if not sources:
@@ -265,37 +276,37 @@ def calculate_goal_lines_final(correct_score, h2h, team_perf,
     weights = []
     source_names = []
 
-    # Team Performance (30% → dinamik)
+    # Team Performance
     if team_perf.get('goal_lines'):
         sources.append(team_perf['goal_lines'])
-        weights.append(0.30)
+        weights.append(GOAL_LINES_WEIGHTS['team_perf'])
         source_names.append('team_perf')
 
-    # H2H Analysis (20% → dinamik)
+    # H2H Analysis
     if h2h.get('goal_lines'):
         sources.append(h2h['goal_lines'])
-        weights.append(0.20)
+        weights.append(GOAL_LINES_WEIGHTS['h2h'])
         source_names.append('h2h')
 
-    # Correct Score (15% → dinamik)
+    # Correct Score
     if correct_score.get('goal_lines'):
         sources.append(correct_score['goal_lines'])
-        weights.append(0.15)
+        weights.append(GOAL_LINES_WEIGHTS['correct_score'])
         source_names.append('correct_score')
 
-    # EAGLE: Poisson Model (20%) - çok güçlü gol tahmini kaynağı
+    # Poisson Model
     if poisson and poisson.get('goal_lines'):
         sources.append(poisson['goal_lines'])
-        weights.append(0.20)
+        weights.append(GOAL_LINES_WEIGHTS['poisson'])
         source_names.append('poisson')
 
-    # EAGLE: Odds Movement (15%) - piyasa beklentisi
+    # Odds Movement
     if odds_movement and odds_movement.get('goal_lines'):
         sources.append(odds_movement['goal_lines'])
-        weights.append(0.15)
+        weights.append(GOAL_LINES_WEIGHTS['odds_movement'])
         source_names.append('odds_movement')
 
-    # EAGLE: Streak signals (5% bonus)
+    # Streak signals
     if streak_signals:
         over_sig = streak_signals.get('over25') or streak_signals.get('h2h_over25')
         if over_sig and over_sig.get('strength', 0) >= 0.7:
@@ -306,7 +317,7 @@ def calculate_goal_lines_final(correct_score, h2h, team_perf,
             else:
                 sources.append({'over_2_5': 50 - strength * 20, 'under_2_5': 50 + strength * 20,
                                 'over_3_5': 30 - strength * 10, 'under_3_5': 70 + strength * 10})
-            weights.append(0.05)
+            weights.append(GOAL_LINES_WEIGHTS['streaks'])
             source_names.append('streaks')
     
     if not sources:
@@ -346,31 +357,31 @@ def calculate_btts_final(correct_score, h2h, team_perf,
     weights = []
     source_names = []
 
-    # Team Performance (30% → dinamik)
+    # Team Performance
     if team_perf.get('btts'):
         sources.append(team_perf['btts'])
-        weights.append(0.30)
+        weights.append(BTTS_WEIGHTS['team_perf'])
         source_names.append('team_perf')
 
-    # H2H Analysis (25% → dinamik)
+    # H2H Analysis
     if h2h.get('btts'):
         sources.append(h2h['btts'])
-        weights.append(0.25)
+        weights.append(BTTS_WEIGHTS['h2h'])
         source_names.append('h2h')
 
-    # Correct Score (15% → dinamik)
+    # Correct Score
     if correct_score.get('both_teams_to_score'):
         sources.append(correct_score['both_teams_to_score'])
-        weights.append(0.15)
+        weights.append(BTTS_WEIGHTS['correct_score'])
         source_names.append('correct_score')
 
-    # EAGLE: Poisson Model (20%) - BTTS için çok güçlü
+    # Poisson Model
     if poisson and poisson.get('btts'):
         sources.append(poisson['btts'])
-        weights.append(0.20)
+        weights.append(BTTS_WEIGHTS['poisson'])
         source_names.append('poisson')
 
-    # EAGLE: Streak signals (5%)
+    # Streak signals
     if streak_signals and streak_signals.get('btts'):
         btts_sig = streak_signals['btts']
         if btts_sig.get('strength', 0) >= 0.7:
@@ -379,7 +390,7 @@ def calculate_btts_final(correct_score, h2h, team_perf,
                 sources.append({'yes': 50 + strength * 20, 'no': 50 - strength * 20})
             else:
                 sources.append({'yes': 50 - strength * 20, 'no': 50 + strength * 20})
-            weights.append(0.05)
+            weights.append(BTTS_WEIGHTS['streaks'])
             source_names.append('streaks')
     
     if not sources:
@@ -415,28 +426,28 @@ def calculate_ht_1x2_final(h2h, team_perf,
     weights = []
     source_names = []
 
-    # Team Performance (40% → dinamik)
+    # Team Performance
     if team_perf.get('ht_1x2'):
         sources.append(team_perf['ht_1x2'])
-        weights.append(0.40)
+        weights.append(HT_1X2_WEIGHTS['team_perf'])
         source_names.append('team_perf')
 
-    # H2H Analysis (30% → dinamik)
+    # H2H Analysis
     if h2h.get('ht_1x2'):
         sources.append(h2h['ht_1x2'])
-        weights.append(0.30)
+        weights.append(HT_1X2_WEIGHTS['h2h'])
         source_names.append('h2h')
 
-    # EAGLE: Poisson HT model (15%)
+    # Poisson HT model
     if poisson and poisson.get('ht_1x2'):
         sources.append(poisson['ht_1x2'])
-        weights.append(0.15)
+        weights.append(HT_1X2_WEIGHTS['poisson'])
         source_names.append('poisson')
 
-    # EAGLE: Odds Movement HT (10%)
+    # Odds Movement HT
     if odds_movement and odds_movement.get('ht_1x2'):
         sources.append(odds_movement['ht_1x2'])
-        weights.append(0.10)
+        weights.append(HT_1X2_WEIGHTS['odds_movement'])
         source_names.append('odds_movement')
     
     if not sources:
@@ -473,31 +484,31 @@ def calculate_ht_goals_final(h2h, team_perf,
     weights = []
     source_names = []
 
-    # Team Performance (40% → dinamik)
+    # Team Performance
     if team_perf.get('ht_goals'):
         sources.append(team_perf['ht_goals'])
-        weights.append(0.40)
+        weights.append(HT_GOALS_WEIGHTS['team_perf'])
         source_names.append('team_perf')
 
-    # H2H Analysis (30% → dinamik)
+    # H2H Analysis
     if h2h.get('ht_goals'):
         sources.append(h2h['ht_goals'])
-        weights.append(0.30)
+        weights.append(HT_GOALS_WEIGHTS['h2h'])
         source_names.append('h2h')
 
-    # EAGLE: Poisson HT goals (15%)
+    # Poisson HT goals
     if poisson and poisson.get('ht_goals'):
         sources.append(poisson['ht_goals'])
-        weights.append(0.15)
+        weights.append(HT_GOALS_WEIGHTS['poisson'])
         source_names.append('poisson')
 
-    # EAGLE: Streak signal for HT goals (5%)
+    # Streak signal for HT goals
     if streak_signals and streak_signals.get('ht_over05'):
         ht_sig = streak_signals['ht_over05']
         if ht_sig.get('strength', 0) >= 0.7:
             strength = ht_sig['strength']
             sources.append({'over_0_5': 50 + strength * 25, 'under_0_5': 50 - strength * 25})
-            weights.append(0.05)
+            weights.append(HT_GOALS_WEIGHTS['streaks'])
             source_names.append('streaks')
     
     if not sources:

@@ -259,22 +259,17 @@ def _fetch_date_matches(target_date: str) -> List[Dict[str, Any]]:
 
 def _fetch_match_detail_stats(match_id: int) -> Dict[str, Optional[int]]:
     """
-    Fetch technical stats (corners, cards) for a single finished match
-    from NowGoal's detail endpoint.
+    Fetch technical stats (corners, cards) for a single finished match.
 
-    Returns dict with 'total_corners' and 'total_cards' keys
-    (None if unavailable).
+    Tries multiple approaches:
+    1. NowGoal live page — parse _detailData JS variable
+    2. NowGoal AJAX endpoint — type=14 for tech stats
+    3. Fallback: return None (corner data unavailable)
+
+    Cards are already extracted from the main A[] array in most cases,
+    so this function primarily targets corner data enrichment.
     """
-    import random
     from app_config import current_config
-    from http_client import get_http_session, get_request_headers, safe_get
-
-    base_url = current_config.PRIMARY_DATA_SOURCE
-    # Detail endpoint uses a different URL pattern
-    # NowGoal detail.js format: /match/live-{match_id}
-    # But the tech stats come from the h2h/analysis page
-    # The simplest source is the odds/stats endpoint
-    detail_url = f"{base_url}/match/h2h-{match_id}"
 
     result: Dict[str, Optional[int]] = {
         "total_corners": None,
@@ -282,74 +277,74 @@ def _fetch_match_detail_stats(match_id: int) -> Dict[str, Optional[int]]:
     }
 
     try:
-        session = get_http_session(base_url)
-        headers = get_request_headers(base_url)
-        timeout = (
-            current_config.HTTP_TIMEOUT_CONNECT,
-            current_config.HTTP_TIMEOUT_READ,
-        )
+        import requests as _requests
+        base_url = current_config.PRIMARY_DATA_SOURCE
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": f"{base_url}/",
+        }
 
-        response = safe_get(session, detail_url, headers=headers, timeout=timeout)
-        if response.status_code != 200:
-            return result
+        # Approach 1: Try live page and parse embedded data
+        live_url = f"{base_url}/match/live-{match_id}"
+        try:
+            resp = _requests.get(live_url, headers=headers, timeout=12)
+            if resp.status_code == 200 and len(resp.text) > 1000:
+                html = resp.text
 
-        html = response.text
+                # Parse _detailData JSON if embedded
+                detail_match = re.search(
+                    r'var\s+_detailData\s*=\s*(\{.*?\})\s*;',
+                    html, re.DOTALL,
+                )
+                if detail_match:
+                    import json
+                    try:
+                        detail = json.loads(detail_match.group(1))
+                        # Corner data in detail.corner or detail.techStat
+                        corner_data = detail.get("corner") or detail.get("techStat", {})
+                        if isinstance(corner_data, dict):
+                            h = corner_data.get("home") or corner_data.get("h")
+                            a = corner_data.get("away") or corner_data.get("a")
+                            if h is not None and a is not None:
+                                result["total_corners"] = int(h) + int(a)
+                    except (json.JSONDecodeError, ValueError, TypeError):
+                        pass
 
-        # Look for tech stats in the page's JavaScript
-        # NowGoal embeds tc[n]="home|away" where n is the stat ID
-        corners_home = None
-        corners_away = None
-        cards_total = None
+                # Legacy: try tc[] pattern (older NowGoal versions)
+                if result["total_corners"] is None:
+                    for m in RE_TECH_STATS.finditer(html):
+                        stat_id = int(m.group(1))
+                        values = m.group(2).split("|")
+                        if stat_id == STAT_ID_CORNERS and len(values) >= 2:
+                            try:
+                                result["total_corners"] = int(values[0]) + int(values[1])
+                            except (ValueError, TypeError):
+                                pass
 
-        for m in RE_TECH_STATS.finditer(html):
-            stat_id = int(m.group(1))
-            values = m.group(2).split("|")
-            if len(values) < 2:
-                continue
+                # Cards from HTML if not already from A[] array
+                if result["total_cards"] is None:
+                    yellow_count = len(re.findall(
+                        r'class="[^"]*yellow(?:card|Card)[^"]*"',
+                        html, re.IGNORECASE,
+                    ))
+                    red_count = len(re.findall(
+                        r'class="[^"]*red(?:card|Card)[^"]*"',
+                        html, re.IGNORECASE,
+                    ))
+                    if yellow_count > 0 or red_count > 0:
+                        result["total_cards"] = yellow_count + red_count
 
-            if stat_id == STAT_ID_CORNERS:
-                try:
-                    corners_home = int(values[0])
-                    corners_away = int(values[1])
-                    result["total_corners"] = corners_home + corners_away
-                except (ValueError, TypeError):
-                    pass
-
-        # Cards: parse from match event data or from the stats table
-        # NowGoal shows yellow/red card counts in the match event stream
-        # Look for card indicators in the HTML
-        yellow_pattern = re.compile(
-            r'class="[^"]*yellowcard[^"]*"[^>]*>.*?(\d+)',
-            re.IGNORECASE | re.DOTALL,
-        )
-        red_pattern = re.compile(
-            r'class="[^"]*redcard[^"]*"[^>]*>.*?(\d+)',
-            re.IGNORECASE | re.DOTALL,
-        )
-
-        yellow_matches = yellow_pattern.findall(html)
-        red_matches = red_pattern.findall(html)
-
-        if yellow_matches or red_matches:
-            total = 0
-            for y in yellow_matches:
-                try:
-                    total += int(y)
-                except ValueError:
-                    pass
-            for r in red_matches:
-                try:
-                    total += int(r)
-                except ValueError:
-                    pass
-            if total > 0:
-                result["total_cards"] = total
+        except Exception as page_err:
+            logger.debug(
+                "[ResultResolver] Live page fetch failed for %d: %s",
+                match_id, page_err,
+            )
 
         return result
 
     except Exception as exc:
         logger.debug(
-            "[ResultResolver] Detail fetch failed for match %d: %s", match_id, exc
+            "[ResultResolver] Detail fetch failed for match %d: %s", match_id, exc,
         )
         return result
 

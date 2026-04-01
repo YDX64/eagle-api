@@ -44,6 +44,10 @@ ALGORITHM_FILE_MAP: Dict[str, str] = {
     "poisson_model": "poisson_model.py",
     "odds_movement": "odds_movement.py",
     "final_predictions": "final_predictions.py",
+    # Basket1 algorithms — remote tuning via HTTP bridge
+    "basket_ml": "__basket1_remote__",
+    "basket_ou": "__basket1_remote__",
+    "basket_ah": "__basket1_remote__",
 }
 
 # Tunable parameters per algorithm.
@@ -110,16 +114,90 @@ TUNABLE_PARAMS: Dict[str, Dict[str, Dict[str, Any]]] = {
             "description": "Default corners per match for unknown leagues",
         },
     },
-    "poisson_model": {
-        # The league_avg is used inline: e.g. `league_avg = 1.3`
-        # Not a top-level constant — skipped for now.
-    },
-    "odds_movement": {
-        # No simple top-level tunable constants.
-    },
+    # --- final_predictions.py source weights (ms, over25, btts, ht markets) ---
     "final_predictions": {
-        # Source weights are inline in calculate_*_final functions.
-        # Complex to tune via regex — reserved for future.
+        "MS_WEIGHTS": {
+            "type": "dict",
+            "keys": ["team_perf", "odds", "h2h", "correct_score", "poisson", "odds_movement", "streaks"],
+            "default": {"team_perf": 0.25, "odds": 0.25, "h2h": 0.20, "correct_score": 0.10, "poisson": 0.15, "odds_movement": 0.10, "streaks": 0.05},
+            "description": "Source weights for 1X2 (match result) prediction",
+        },
+        "GOAL_LINES_WEIGHTS": {
+            "type": "dict",
+            "keys": ["team_perf", "h2h", "correct_score", "poisson", "odds_movement", "streaks"],
+            "default": {"team_perf": 0.30, "h2h": 0.20, "correct_score": 0.15, "poisson": 0.20, "odds_movement": 0.15, "streaks": 0.05},
+            "description": "Source weights for goal lines (over/under) prediction",
+        },
+        "BTTS_WEIGHTS": {
+            "type": "dict",
+            "keys": ["team_perf", "h2h", "correct_score", "poisson", "streaks"],
+            "default": {"team_perf": 0.30, "h2h": 0.25, "correct_score": 0.15, "poisson": 0.20, "streaks": 0.05},
+            "description": "Source weights for BTTS prediction",
+        },
+        "HT_1X2_WEIGHTS": {
+            "type": "dict",
+            "keys": ["team_perf", "h2h", "poisson", "odds_movement"],
+            "default": {"team_perf": 0.40, "h2h": 0.30, "poisson": 0.15, "odds_movement": 0.10},
+            "description": "Source weights for half-time 1X2 prediction",
+        },
+        "HT_GOALS_WEIGHTS": {
+            "type": "dict",
+            "keys": ["team_perf", "h2h", "poisson", "streaks"],
+            "default": {"team_perf": 0.40, "h2h": 0.30, "poisson": 0.15, "streaks": 0.05},
+            "description": "Source weights for half-time goals prediction",
+        },
+        "DC_BLEND_WEIGHT": {
+            "type": "float",
+            "default": 0.05,
+            "min": 0.01,
+            "max": 0.30,
+            "description": "Dixon-Coles blend weight for 1X2 enhancement",
+        },
+        "FH_BLEND_WEIGHT": {
+            "type": "float",
+            "default": 0.15,
+            "min": 0.05,
+            "max": 0.40,
+            "description": "First-half model blend weight for HT predictions",
+        },
+        "HALF_BTTS_BLEND_WEIGHT": {
+            "type": "float",
+            "default": 0.30,
+            "min": 0.10,
+            "max": 0.50,
+            "description": "Half-BTTS blend weight for HT BTTS prediction",
+        },
+    },
+    # --- Basketball (Basket1) — remote tuning via HTTP ---
+    "basket_ml": {
+        "ML_EDGE_THRESHOLD": {
+            "type": "float",
+            "default": 5.0,
+            "min": 1.0,
+            "max": 15.0,
+            "description": "Minimum edge % for ML pick generation",
+            "remote": True,
+        },
+    },
+    "basket_ou": {
+        "OU_EDGE_THRESHOLD": {
+            "type": "float",
+            "default": 5.0,
+            "min": 1.0,
+            "max": 15.0,
+            "description": "Minimum edge % for OU pick generation",
+            "remote": True,
+        },
+    },
+    "basket_ah": {
+        "AH_EDGE_THRESHOLD": {
+            "type": "float",
+            "default": 5.0,
+            "min": 1.0,
+            "max": 15.0,
+            "description": "Minimum edge % for AH pick generation",
+            "remote": True,
+        },
     },
 }
 

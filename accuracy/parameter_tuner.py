@@ -379,9 +379,9 @@ class AutoTuner:
             algorithms_tuned = 0
 
             for algo_info in underperformers:
-                algo_name = algo_info["algorithm"]
+                market_name = algo_info["market"]
                 algo_result = self._tune_algorithm(algo_info)
-                details[algo_name] = algo_result
+                details[market_name] = algo_result
                 total_variations += algo_result.get("variations_tested", 0)
                 if algo_result.get("applied"):
                     algorithms_tuned += 1
@@ -592,17 +592,25 @@ class AutoTuner:
                 tunable_algos.add(algo)
 
         # Map market names in prediction_results to algorithm names in TUNABLE_PARAMS.
-        # In Eagle, the "algorithm" column in prediction_results holds the market name
-        # (e.g. "first_half", "corner", "card", "correct_score", "handicap").
-        # We map these back to the module names.
         market_to_module = {
+            # Dedicated algorithm files
             "first_half": "first_half_predictions",
             "second_half": "second_half_predictions",
             "corner": "corner_predictions",
             "card": "card_predictions",
             "correct_score": "correct_score_enhanced",
             "handicap": "handicap_predictions",
-            "half_btts": "half_btts_predictions",
+            # final_predictions.py markets (source weight tuning)
+            "ms": "final_predictions",
+            "over25": "final_predictions",
+            "over35": "final_predictions",
+            "btts": "final_predictions",
+            "ht_result": "final_predictions",
+            "ht_over05": "final_predictions",
+            # Basketball (remote via Basket1 HTTP bridge)
+            "basket_ml": "basket_ml",
+            "basket_ou": "basket_ou",
+            "basket_ah": "basket_ah",
         }
 
         # Get accuracy for all markets
@@ -679,8 +687,31 @@ class AutoTuner:
             algo_name, market_name, current_accuracy,
         )
 
+        # Basketball remote tuning
+        if algo_name.startswith("basket_"):
+            return self._tune_basket1_algorithm(algo_info)
+
+        # For final_predictions, select market-specific weight param
+        market_param_map = {
+            "ms": "MS_WEIGHTS",
+            "over25": "GOAL_LINES_WEIGHTS",
+            "over35": "GOAL_LINES_WEIGHTS",
+            "btts": "BTTS_WEIGHTS",
+            "ht_result": "HT_1X2_WEIGHTS",
+            "ht_over05": "HT_GOALS_WEIGHTS",
+        }
+
         # Read current parameters
         current_params = read_algorithm_params(algo_name)
+
+        # For final_predictions, filter to the relevant weight dict
+        if algo_name == "final_predictions" and market_name in market_param_map:
+            target_param = market_param_map[market_name]
+            if target_param in current_params:
+                current_params = {target_param: current_params[target_param]}
+            else:
+                current_params = {}
+
         if not current_params:
             logger.info("[AutoTuner] No readable params for %s — skipping", algo_name)
             return {
@@ -901,6 +932,40 @@ class AutoTuner:
             len(changed_params), algorithm,
         )
         return True
+
+    # ------------------------------------------------------------------
+    # Basketball (Basket1) remote tuning
+    # ------------------------------------------------------------------
+
+    def _tune_basket1_algorithm(self, algo_info: Dict) -> Dict[str, Any]:
+        """
+        Attempt to tune a Basket1 algorithm via HTTP bridge.
+
+        Currently a placeholder that logs the accuracy but does not
+        modify remote parameters — remote parameter tuning requires
+        the Basket1 API to expose a config endpoint.
+        """
+        algo_name = algo_info["algorithm"]
+        market_name = algo_info["market"]
+        current_accuracy = algo_info["accuracy_pct"]
+
+        logger.info(
+            "[AutoTuner] Basketball algorithm %s (market=%s, accuracy=%.1f%%) — "
+            "remote tuning not yet available, logging only",
+            algo_name, market_name, current_accuracy,
+        )
+
+        return {
+            "algorithm": algo_name,
+            "market": market_name,
+            "status": "remote_logged",
+            "current_accuracy": current_accuracy,
+            "best_estimated_accuracy": current_accuracy,
+            "improvement": 0.0,
+            "variations_tested": 0,
+            "applied": False,
+            "note": "Basketball remote tuning — accuracy tracked, parameter tuning pending Basket1 config API",
+        }
 
     # ------------------------------------------------------------------
     # Run tracking
